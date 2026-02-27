@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Error - DecisionLedger POC{% endblock %}
+
+{% block breadcrumb %}
+<a href="/">Home</a> <span>/</span> Error
+{% endblock %}
+
+{% block content %}
+<div class="content">
+    <div class="error">
+        <h2>{{ error_code }}</h2>
+        <p>{{ error_message }}</p>
+    </div>
+    
+    <div style="margin-top: 1rem;">
+        <a href="/" class="btn">Back to Home</a>
+    </div>
+</div>
+{% endblock %}

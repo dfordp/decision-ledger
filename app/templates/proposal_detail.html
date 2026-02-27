@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Proposal {{ proposal.id }} - DecisionLedger{% endblock %}
+
+{% block extra_css %}
+<style>
+    .detail-header {
+        background: white;
+        padding: 2rem;
+        border-radius: 8px;
+        margin-bottom: 2rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .detail-header h1 {
+        margin-bottom: 1rem;
+        color: #2c3e50;
+    }
+    .meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+    .meta-item {
+        background: #ecf0f1;
+        padding: 1rem;
+        border-radius: 4px;
+    }
+    .meta-label {
+        font-weight: bold;
+        color: #7f8c8d;
+        font-size: 0.85rem;
+    }
+    .meta-value {
+        font-size: 1.1rem;
+        color: #2c3e50;
+        margin-top: 0.25rem;
+    }
+    .outcome-won {
+        background: #d4edda;
+        color: #155724;
+    }
+    .outcome-lost {
+        background: #f8d7da;
+        color: #721c24;
+    }
+    .outcome-rejected {
+        background: #fff3cd;
+        color: #856404;
+    }
+    .decisions-section {
+        background: white;
+        padding: 2rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .decision-card {
+        background: #f8f9fa;
+        border-left: 4px solid #3498db;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        border-radius: 4px;
+    }
+    .back-link {
+        display: inline-block;
+        margin-bottom: 1rem;
+        color: #3498db;
+        text-decoration: none;
+    }
+    .back-link:hover {
+        text-decoration: underline;
+    }
+    .violation-yes {
+        color: #e74c3c;
+    }
+    .violation-no {
+        color: #27ae60;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<a href="/" class="back-link">← Back to Home</a>
+
+<div class="detail-header">
+    <h1>Proposal #{{ proposal.id }}</h1>
+    <p>{{ proposal.summary }}</p>
+    <div class="meta">
+        <div class="meta-item">
+            <div class="meta-label">Year</div>
+            <div class="meta-value">{{ proposal.year }}</div>
+        </div>
+        <div class="meta-item outcome-{{ proposal.outcome|lower }}">
+            <div class="meta-label">Outcome</div>
+            <div class="meta-value">{{ proposal.outcome }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Vendor</div>
+            <div class="meta-value">{{ proposal.vendor_name }}</div>
+        </div>
+    </div>
+    {% if proposal.reason %}
+    <div style="margin-top: 1rem; padding: 1rem; background: #ecf0f1; border-radius: 4px;">
+        <strong>Reason:</strong> {{ proposal.reason }}
+    </div>
+    {% endif %}
+</div>
+
+{% if decisions %}
+<div class="decisions-section">
+    <h2>Decision Details</h2>
+    {% for decision in decisions %}
+    <div class="decision-card">
+        <h3>{{ decision.dimension }}</h3>
+        <p><strong>Value:</strong> {{ decision.value }}</p>
+        <p><strong>Nature:</strong> {{ decision.nature }}</p>
+        {% if decision.confidence %}
+        <p><strong>Confidence:</strong> {{ (decision.confidence * 100)|int }}%</p>
+        {% endif %}
+        <p><strong>Violation:</strong> <span class="{% if decision.violation %}violation-yes{% else %}violation-no{% endif %}">{{ 'Yes' if decision.violation else 'No' }}</span></p>
+        {% if decision.excerpt %}
+        <p><strong>Source:</strong> <em>{{ decision.excerpt }}</em></p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div style="background: white; padding: 2rem; border-radius: 8px; text-align: center; color: #7f8c8d;">
+    No decision details available.
+</div>
+{% endif %}
+{% endblock %}

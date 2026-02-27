@@ -1,0 +1,18 @@
+FROM postgres:16-bullseye
+
+# Install dependencies for building pgvector
+RUN apt-get update && apt-get install -y \
+    git \
+    build-essential \
+    postgresql-server-dev-16 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone and build pgvector
+RUN git clone --branch v0.5.1 https://github.com/pgvector/pgvector.git /tmp/pgvector && \
+    cd /tmp/pgvector && \
+    make && \
+    make install && \
+    rm -rf /tmp/pgvector
+
+# Enable vector extension in PostgreSQL config
+RUN echo "shared_preload_libraries = 'vector'" >> /etc/postgresql/postgresql.conf
