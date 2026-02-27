@@ -1,1 +1,0 @@
-"""DecisionLedger POC Application Package"""

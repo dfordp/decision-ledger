@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Historical Proposals - DecisionLedger{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📚 Historical Proposals</h2>
+    <p style="margin-bottom: 20px;">
+        Review past tender submissions grouped by outcome. 
+        Each proposal contains multiple decisions across different evaluation dimensions.
+    </p>
+</div>
+
+<!-- WON Proposals -->
+<div class="card">
+    <h2><span class="badge won">WON</span> Successful Proposals ({{ won_proposals|length }})</h2>
+    <p style="color: #666; margin-bottom: 20px;">
+        Contracts we won. These decisions represent our successful strategies.
+    </p>
+    
+    {% if won_proposals %}
+        <div style="display: grid; gap: 15px;">
+            {% for proposal in won_proposals %}
+            <div style="border: 1px solid #d4edda; border-radius: 6px; padding: 15px; background: #f8fff9;">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                    <div>
+                        <h3 style="margin-bottom: 5px; color: #155724;">{{ proposal.tender_name }}</h3>
+                        <div style="font-size: 14px; color: #666;">
+                            <span style="margin-right: 15px;">📁 {{ proposal.domain }}</span>
+                            <span style="margin-right: 15px;">📅 {{ proposal.submitted_at.strftime('%Y-%m-%d') }}</span>
+                            <span>📊 {{ proposal.decision_count }} decisions</span>
+                        </div>
+                    </div>
+                    <span class="badge won">WON</span>
+                </div>
+                
+                {% if proposal.outcome_reason %}
+                <p style="color: #555; margin-bottom: 10px; font-style: italic;">
+                    "{{ proposal.outcome_reason }}"
+                </p>
+                {% endif %}
+                
+                <a href="/proposal/{{ proposal.id }}" class="button" style="font-size: 13px; padding: 8px 16px;">
+                    View Details
+                </a>
+            </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p style="color: #666; font-style: italic;">No winning proposals in history.</p>
+    {% endif %}
+</div>
+
+<!-- LOST Proposals -->
+<div class="card">
+    <h2><span class="badge lost">LOST</span> Lost Proposals ({{ lost_proposals|length }})</h2>
+    <p style="color: #666; margin-bottom: 20px;">
+        Proposals we submitted but client selected another vendor. Learn from what didn't work.
+    </p>
+    
+    {% if lost_proposals %}
+        <div style="display: grid; gap: 15px;">
+            {% for proposal in lost_proposals %}
+            <div style="border: 1px solid #f8d7da; border-radius: 6px; padding: 15px; background: #fff5f5;">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                    <div>
+                        <h3 style="margin-bottom: 5px; color: #721c24;">{{ proposal.tender_name }}</h3>
+                        <div style="font-size: 14px; color: #666;">
+                            <span style="margin-right: 15px;">📁 {{ proposal.domain }}</span>
+                            <span style="margin-right: 15px;">📅 {{ proposal.submitted_at.strftime('%Y-%m-%d') }}</span>
+                            <span>📊 {{ proposal.decision_count }} decisions</span>
+                        </div>
+                    </div>
+                    <span class="badge lost">LOST</span>
+                </div>
+                
+                {% if proposal.outcome_reason %}
+                <p style="color: #555; margin-bottom: 10px; font-style: italic;">
+                    "{{ proposal.outcome_reason }}"
+                </p>
+                {% endif %}
+                
+                <a href="/proposal/{{ proposal.id }}" class="button" style="font-size: 13px; padding: 8px 16px;">
+                    View Details
+                </a>
+            </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p style="color: #666; font-style: italic;">No lost proposals in history.</p>
+    {% endif %}
+</div>
+
+<!-- REJECTED Proposals -->
+<div class="card">
+    <h2><span class="badge rejected">REJECTED</span> Rejected Proposals ({{ rejected_proposals|length }})</h2>
+    <p style="color: #666; margin-bottom: 20px;">
+        Tenders we withdrew from before submission. Requirements exceeded our risk tolerance.
+    </p>
+    
+    {% if rejected_proposals %}
+        <div style="display: grid; gap: 15px;">
+            {% for proposal in rejected_proposals %}
+            <div style="border: 1px solid #fff3cd; border-radius: 6px; padding: 15px; background: #fffef5;">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                    <div>
+                        <h3 style="margin-bottom: 5px; color: #856404;">{{ proposal.tender_name }}</h3>
+                        <div style="font-size: 14px; color: #666;">
+                            <span style="margin-right: 15px;">📁 {{ proposal.domain }}</span>
+                            <span style="margin-right: 15px;">📅 {{ proposal.submitted_at.strftime('%Y-%m-%d') }}</span>
+                            <span>📊 {{ proposal.decision_count }} decisions</span>
+                        </div>
+                    </div>
+                    <span class="badge rejected">REJECTED</span>
+                </div>
+                
+                {% if proposal.outcome_reason %}
+                <p style="color: #555; margin-bottom: 10px; font-style: italic;">
+                    "{{ proposal.outcome_reason }}"
+                </p>
+                {% endif %}
+                
+                <a href="/proposal/{{ proposal.id }}" class="button" style="font-size: 13px; padding: 8px 16px;">
+                    View Details
+                </a>
+            </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p style="color: #666; font-style: italic;">No rejected proposals in history.</p>
+    {% endif %}
+</div>
+
+<div style="text-align: center; margin-top: 30px;">
+    <a href="/" class="button secondary">← Back to Home</a>
+</div>
+{% endblock %}

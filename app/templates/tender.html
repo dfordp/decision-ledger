@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tender.name }} - DecisionLedger{% endblock %}
+
+{% block extra_css %}
+<style>
+    .dimension-tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+    }
+    
+    .dimension-tab {
+        padding: 10px 20px;
+        background: white;
+        border: 2px solid #ddd;
+        border-radius: 6px;
+        text-decoration: none;
+        color: #333;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+    
+    .dimension-tab:hover {
+        border-color: #667eea;
+    }
+    
+    .dimension-tab.active {
+        background: #667eea;
+        color: white;
+        border-color: #667eea;
+    }
+    
+    .metric-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+    
+    .metric-card {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 6px;
+        border-left: 4px solid #667eea;
+    }
+    
+    .metric-label {
+        font-size: 12px;
+        color: #666;
+        text-transform: uppercase;
+        font-weight: 600;
+        margin-bottom: 5px;
+    }
+    
+    .metric-value {
+        font-size: 24px;
+        font-weight: 600;
+        color: #333;
+    }
+    
+    .evidence-item {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 15px;
+        margin-bottom: 15px;
+        background: white;
+    }
+    
+    .evidence-item:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    .similarity-bar {
+        height: 8px;
+        background: #e9ecef;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 10px;
+    }
+    
+    .similarity-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        transition: width 0.3s;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Tender Header -->
+<div class="card">
+    <h2>{{ tender.name }}</h2>
+    <div style="font-size: 14px; color: #666; margin-top: 5px;">
+        <span style="margin-right: 20px;">📁 Domain: <strong>{{ tender.domain }}</strong></span>
+        <span style="margin-right: 20px;">📅 Year: <strong>{{ tender.year }}</strong></span>
+        <span>📊 Status: <strong>{{ tender.status }}</strong></span>
+    </div>
+</div>
+
+<!-- Success Message -->
+{% if request.query_params.get('saved') == 'true' %}
+<div class="alert success">
+    ✓ Decision saved successfully! This decision will now influence future tender evaluations.
+</div>
+{% endif %}
+
+<!-- Dimension Tabs -->
+<div class="card">
+    <h3 style="margin-bottom: 15px;">Select Evaluation Dimension:</h3>
+    <div class="dimension-tabs">
+        {% for dim in all_dimensions %}
+        <a href="/tender/{{ tender.id }}?dimension={{ dim.key }}" 
+           class="dimension-tab {% if dim.key == current_dimension %}active{% endif %}">
+            {{ dim.display_name }}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Current Dimension Analysis -->
+<div class="card">
+    <h2>{{ reasoning.dimension_name }} Analysis</h2>
+    
+    <!-- Metrics Row -->
+    <div class="metric-row">
+        <div class="metric-card" style="border-left-color: #dc3545;">
+            <div class="metric-label">Requirement</div>
+            <div class="metric-value">
+                {{ reasoning.requirement.required_value|format_number(reasoning.dimension_unit) }}
+            </div>
+            <span class="badge {{ reasoning.requirement.strictness }}">
+                {{ reasoning.requirement.strictness }}
+            </span>
+        </div>
+        
+        <div class="metric-card" style="border-left-color: #6c757d;">
+            <div class="metric-label">Policy Range</div>
+            <div class="metric-value" style="font-size: 18px;">
+                {{ reasoning.policy.min_value|format_number(reasoning.dimension_unit) }} - 
+                {{ reasoning.policy.max_value|format_number(reasoning.dimension_unit) }}
+            </div>
+            <span class="badge">{{ reasoning.policy.flexibility }}</span>
+        </div>
+        
+        <div class="metric-card" style="border-left-color: #28a745;">
+            <div class="metric-label">Recommendation</div>
+            <div class="metric-value">
+                {{ reasoning.recommended_value|format_number(reasoning.dimension_unit) }}
+            </div>
+            <span class="badge {{ reasoning.status.lower() }}">{{ reasoning.status }}</span>
+        </div>
+        
+        <div class="metric-card" style="border-left-color: #667eea;">
+            <div class="metric-label">Confidence</div>
+            <div class="metric-value">{{ (reasoning.confidence * 100)|int }}%</div>
+            <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                Based on {{ reasoning.evidence|length }} similar cases
+            </div>
+        </div>
+    </div>
+    
+    <!-- Requirement Description -->
+    {% if reasoning.requirement.description %}
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 6px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+        <strong>Requirement Details:</strong>
+        <p style="margin-top: 5px; color: #666;">{{ reasoning.requirement.description }}</p>
+    </div>
+    {% endif %}
+    
+    <!-- Reasoning Bullets -->
+    <div style="margin-top: 20px;">
+        <h3 style="margin-bottom: 15px;">💡 Why This Recommendation?</h3>
+        <ul style="margin-left: 20px;">
+            {% for reason in reasoning.reasoning %}
+            <li style="margin-bottom: 10px; color: #555;">{{ reason }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+
+<!-- Evidence Section -->
+<div class="card">
+    <h2>📊 Evidence from Similar Past Decisions</h2>
+    <p style="color: #666; margin-bottom: 20px;">
+        These historical decisions are semantically similar to the current requirement.
+        Sorted by relevance using vector similarity search.
+    </p>
+    
+    {% if reasoning.evidence %}
+        {% for evidence in reasoning.evidence %}
+        <div class="evidence-item">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                <div>
+                    <h3 style="margin-bottom: 5px; color: #333;">{{ evidence.tender_name }}</h3>
+                    <div style="font-size: 13px; color: #666;">
+                        <span style="margin-right: 15px;">📁 {{ evidence.domain }}</span>
+                        <span style="margin-right: 15px;">📅 {{ evidence.submitted_at.strftime('%Y-%m-%d') }}</span>
+                        <span>Offered: <strong>{{ evidence.offered_value|format_number(reasoning.dimension_unit) }}</strong></span>
+                    </div>
+                </div>
+                <span class="badge {{ evidence.outcome.lower() }}">{{ evidence.outcome }}</span>
+            </div>
+            
+            <div style="margin-bottom: 10px;">
+                <strong style="font-size: 13px; color: #555;">Justification:</strong>
+                <p style="margin-top: 5px; color: #666; font-size: 14px;">
+                    {{ evidence.justification }}
+                </p>
+            </div>
+            
+            {% if evidence.source_excerpt %}
+            <div style="background: #f8f9fa; padding: 10px; border-radius: 4px; margin-bottom: 10px;">
+                <p style="color: #666; font-size: 13px; font-style: italic;">
+                    "{{ evidence.source_excerpt }}"
+                </p>
+            </div>
+            {% endif %}
+            
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 12px; color: #666;">
+                    Similarity Score: <strong>{{ (evidence.similarity * 100)|int }}%</strong>
+                </span>
+                <div style="flex: 1; max-width: 200px; margin-left: 20px;">
+                    <div class="similarity-bar">
+                        <div class="similarity-fill" style="width: {{ (evidence.similarity * 100)|int }}%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p style="color: #666; font-style: italic;">
+            No similar historical decisions found. This would be a first-of-its-kind decision.
+        </p>
+    {% endif %}
+</div>
+
+<!-- Decision Form -->
+<div class="card">
+    <h2>✍️ Make Your Decision</h2>
+    
+    {% if existing_decision %}
+    <div class="alert success" style="margin-bottom: 20px;">
+        <strong>✓ Decision already recorded for this dimension:</strong>
+        <div style="margin-top: 10px;">
+            Offered Value: <strong>{{ existing_decision.offered_value|format_number(reasoning.dimension_unit) }}</strong>
+        </div>
+        <div style="margin-top: 5px; font-size: 14px;">
+            You can update it below.
+        </div>
+    </div>
+    {% endif %}
+    
+    <form method="POST" action="/api/decision/update">
+        <input type="hidden" name="tender_id" value="{{ tender.id }}">
+        <input type="hidden" name="dimension" value="{{ current_dimension }}">
+        
+        <div class="form-group">
+            <label for="final_value">
+                Final Value ({{ reasoning.dimension_unit }})
+                <span style="color: #dc3545;">*</span>
+            </label>
+            <input 
+                type="number" 
+                id="final_value" 
+                name="final_value" 
+                step="0.1"
+                value="{{ reasoning.recommended_value }}"
+                required
+            >
+            <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                Recommended: {{ reasoning.recommended_value|format_number(reasoning.dimension_unit) }} 
+                (Policy: {{ reasoning.policy.min_value|format_number(reasoning.dimension_unit) }} - 
+                {{ reasoning.policy.max_value|format_number(reasoning.dimension_unit) }})
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label for="user_notes">
+                Your Rationale / Notes (Optional)
+            </label>
+            <textarea 
+                id="user_notes" 
+                name="user_notes"
+                placeholder="Add any notes about why you chose this value, especially if overriding the recommendation..."
+            ></textarea>
+        </div>
+        
+        <div style="display: flex; gap: 10px;">
+            <button type="submit">
+                💾 Save Decision
+            </button>
+            <button type="button" class="secondary" onclick="document.getElementById('final_value').value = '{{ reasoning.recommended_value }}'">
+                ↺ Reset to Recommendation
+            </button>
+        </div>
+    </form>
+</div>
+
+<div style="text-align: center; margin-top: 30px;">
+    <a href="/" class="button secondary">← Back to Home</a>
+</div>
+{% endblock %}

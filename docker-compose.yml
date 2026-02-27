@@ -1,56 +1,69 @@
-version: '3.9'
+version: '3.8'
 
 services:
   postgres:
-    build:
-      context: .
-      dockerfile: Dockerfile.postgres
-    container_name: decisionledger-postgres
+    image: ankane/pgvector:latest
+    container_name: decisionledger_db
     environment:
-      POSTGRES_USER: decisionledger
-      POSTGRES_PASSWORD: devpass123
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: decisionledger
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U decisionledger -d decisionledger"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
     networks:
-      - decisionledger
+      - decisionledger_network
 
-  app:
+  backend:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: decisionledger-app
+    container_name: decisionledger_backend
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/decisionledger
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GROQ_API_KEY: ${GROQ_API_KEY}
     ports:
       - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql://decisionledger:devpass123@postgres:5432/decisionledger
-      GROQ_API_KEY: ${GROQ_API_KEY:-dummy_key_for_now}
-      ENVIRONMENT: development
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - .:/app
-    command: >
-      sh -c "python scripts/init_db.py && 
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     networks:
-      - decisionledger
-    stdin_open: true
-    tty: true
+      - decisionledger_network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-networks:
-  decisionledger:
-    driver: bridge
+  seeder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: decisionledger_seeder
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/decisionledger
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - decisionledger_network
+    volumes:
+      - .:/app
+    command: python scripts/seed_data.py
+    profiles:
+      - seed
 
 volumes:
   postgres_data:
+
+networks:
+  decisionledger_network:
+    driver: bridge

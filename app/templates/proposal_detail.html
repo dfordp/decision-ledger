@@ -1,132 +1,83 @@
 {% extends "base.html" %}
 
-{% block title %}Proposal {{ proposal.id }} - DecisionLedger{% endblock %}
-
-{% block extra_css %}
-<style>
-    .detail-header {
-        background: white;
-        padding: 2rem;
-        border-radius: 8px;
-        margin-bottom: 2rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .detail-header h1 {
-        margin-bottom: 1rem;
-        color: #2c3e50;
-    }
-    .meta {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 1rem;
-        margin-top: 1rem;
-    }
-    .meta-item {
-        background: #ecf0f1;
-        padding: 1rem;
-        border-radius: 4px;
-    }
-    .meta-label {
-        font-weight: bold;
-        color: #7f8c8d;
-        font-size: 0.85rem;
-    }
-    .meta-value {
-        font-size: 1.1rem;
-        color: #2c3e50;
-        margin-top: 0.25rem;
-    }
-    .outcome-won {
-        background: #d4edda;
-        color: #155724;
-    }
-    .outcome-lost {
-        background: #f8d7da;
-        color: #721c24;
-    }
-    .outcome-rejected {
-        background: #fff3cd;
-        color: #856404;
-    }
-    .decisions-section {
-        background: white;
-        padding: 2rem;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .decision-card {
-        background: #f8f9fa;
-        border-left: 4px solid #3498db;
-        padding: 1rem;
-        margin-bottom: 1rem;
-        border-radius: 4px;
-    }
-    .back-link {
-        display: inline-block;
-        margin-bottom: 1rem;
-        color: #3498db;
-        text-decoration: none;
-    }
-    .back-link:hover {
-        text-decoration: underline;
-    }
-    .violation-yes {
-        color: #e74c3c;
-    }
-    .violation-no {
-        color: #27ae60;
-    }
-</style>
-{% endblock %}
+{% block title %}{{ proposal.tender_name }} - DecisionLedger{% endblock %}
 
 {% block content %}
-<a href="/" class="back-link">← Back to Home</a>
-
-<div class="detail-header">
-    <h1>Proposal #{{ proposal.id }}</h1>
-    <p>{{ proposal.summary }}</p>
-    <div class="meta">
-        <div class="meta-item">
-            <div class="meta-label">Year</div>
-            <div class="meta-value">{{ proposal.year }}</div>
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px;">
+        <div>
+            <h2>{{ proposal.tender_name }}</h2>
+            <div style="font-size: 14px; color: #666; margin-top: 5px;">
+                <span style="margin-right: 20px;">📁 Domain: <strong>{{ proposal.domain }}</strong></span>
+                <span style="margin-right: 20px;">📅 Submitted: <strong>{{ proposal.submitted_at.strftime('%B %d, %Y') }}</strong></span>
+            </div>
         </div>
-        <div class="meta-item outcome-{{ proposal.outcome|lower }}">
-            <div class="meta-label">Outcome</div>
-            <div class="meta-value">{{ proposal.outcome }}</div>
-        </div>
-        <div class="meta-item">
-            <div class="meta-label">Vendor</div>
-            <div class="meta-value">{{ proposal.vendor_name }}</div>
-        </div>
+        <span class="badge {{ proposal.outcome.lower() }}">{{ proposal.outcome }}</span>
     </div>
-    {% if proposal.reason %}
-    <div style="margin-top: 1rem; padding: 1rem; background: #ecf0f1; border-radius: 4px;">
-        <strong>Reason:</strong> {{ proposal.reason }}
+    
+    {% if proposal.outcome_reason %}
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 6px; border-left: 4px solid #667eea;">
+        <strong>Outcome Reason:</strong>
+        <p style="margin-top: 5px; color: #555;">{{ proposal.outcome_reason }}</p>
     </div>
     {% endif %}
 </div>
 
-{% if decisions %}
-<div class="decisions-section">
-    <h2>Decision Details</h2>
-    {% for decision in decisions %}
-    <div class="decision-card">
-        <h3>{{ decision.dimension }}</h3>
-        <p><strong>Value:</strong> {{ decision.value }}</p>
-        <p><strong>Nature:</strong> {{ decision.nature }}</p>
-        {% if decision.confidence %}
-        <p><strong>Confidence:</strong> {{ (decision.confidence * 100)|int }}%</p>
-        {% endif %}
-        <p><strong>Violation:</strong> <span class="{% if decision.violation %}violation-yes{% else %}violation-no{% endif %}">{{ 'Yes' if decision.violation else 'No' }}</span></p>
-        {% if decision.excerpt %}
-        <p><strong>Source:</strong> <em>{{ decision.excerpt }}</em></p>
-        {% endif %}
-    </div>
-    {% endfor %}
+<div class="card">
+    <h2>Decisions Made ({{ decisions|length }})</h2>
+    <p style="color: #666; margin-bottom: 20px;">
+        Individual decisions for each evaluation dimension in this proposal.
+    </p>
+    
+    {% if decisions %}
+        <div style="display: grid; gap: 20px;">
+            {% for decision in decisions %}
+            <div style="border: 1px solid #ddd; border-radius: 6px; padding: 20px; background: #fafafa;">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                    <div>
+                        <h3 style="margin-bottom: 5px;">{{ decision.dimension_name }}</h3>
+                        <div style="font-size: 14px; color: #666;">
+                            Dimension: {{ decision.dimension_key }}
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 24px; font-weight: 600; color: #667eea;">
+                            {{ decision.offered_value|format_number(decision.dimension_unit) }}
+                        </div>
+                        <div style="font-size: 12px; color: #666;">
+                            Offered Value
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <strong style="color: #555;">Justification:</strong>
+                    <p style="margin-top: 5px; color: #666;">
+                        {{ decision.justification }}
+                    </p>
+                </div>
+                
+                {% if decision.source_excerpt %}
+                <div style="background: white; padding: 12px; border-radius: 4px; border-left: 3px solid #667eea;">
+                    <strong style="color: #555; font-size: 13px;">Source Excerpt:</strong>
+                    <p style="margin-top: 5px; color: #666; font-size: 13px; font-style: italic;">
+                        "{{ decision.source_excerpt }}"
+                    </p>
+                </div>
+                {% endif %}
+                
+                <div style="margin-top: 10px; font-size: 12px; color: #999;">
+                    Recorded: {{ decision.created_at.strftime('%Y-%m-%d %H:%M') }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p style="color: #666; font-style: italic;">No decisions recorded for this proposal.</p>
+    {% endif %}
 </div>
-{% else %}
-<div style="background: white; padding: 2rem; border-radius: 8px; text-align: center; color: #7f8c8d;">
-    No decision details available.
+
+<div style="text-align: center; margin-top: 30px;">
+    <a href="/history" class="button secondary">← Back to History</a>
 </div>
-{% endif %}
 {% endblock %}

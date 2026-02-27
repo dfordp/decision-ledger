@@ -1,416 +1,710 @@
 """
-Seed DecisionLedger database with realistic mock data.
-
-Generates:
-- Vendor policies (bounds & flexibility for each dimension)
-- Historical proposals with outcomes (8 past bids)
-- Proposal decisions (what values were chosen historically)
-- Incoming tenders (2 new RFPs to evaluate)
-- Tender requirements (dimensions needed)
+Seed script for DecisionLedger POC.
+Generates realistic historical proposals, decisions, policies, and tenders.
 """
+
 import sys
 import os
+from datetime import datetime, timedelta
+from decimal import Decimal
+
+# Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.database import SessionLocal
-from app.models import (
-    Vendor, VendorPolicy, Proposal, ProposalDecision,
-    Tender, TenderRequirement,
-    DimensionEnum, FlexibilityEnum, OutcomeEnum, NatureEnum,
-    StrictnessEnum, RiskProfileEnum
+from app.database import (
+    execute_query, insert_and_return_id, fetch_one_value, get_connection
 )
-from datetime import datetime, date
-import random
+from app.embeddings import (
+    generate_policy_embedding,
+    generate_proposal_embedding,
+    generate_decision_embedding,
+    generate_requirement_embedding
+)
 
-def seed_vendor_policies(db, vendor_id):
-    """
-    Create vendor policies defining what the vendor will accept.
+def clear_existing_data():
+    """Clear all data from tables (for clean re-seeding)"""
+    print("Clearing existing data...")
     
-    Policies vary by:
-    - Domain (GLOBAL or specific domain)
-    - Flexibility (fixed, conditional, flexible)
-    - Risk profile influence
-    """
-    print("\n📋 Seeding Vendor Policies...")
+    tables = [
+        'proposal_decisions',
+        'proposals',
+        'tender_requirements',
+        'tenders',
+        'vendor_policy',
+        'vendors'
+    ]
+    
+    for table in tables:
+        execute_query(f"DELETE FROM {table}")
+    
+    print("✓ Existing data cleared\n")
+
+def seed_vendor():
+    """Create the single vendor for this POC"""
+    print("Seeding vendor...")
+    
+    vendor_id = insert_and_return_id(
+        "INSERT INTO vendors (name) VALUES (%s)",
+        ("AcmeCorp Industrial",)
+    )
+    
+    print(f"✓ Created vendor: AcmeCorp Industrial (ID: {vendor_id})\n")
+    return vendor_id
+
+def seed_vendor_policies(vendor_id: int):
+    """Create vendor policies across different domains"""
+    print("Seeding vendor policies...")
+    
+    # Get dimension IDs
+    dimensions = {
+        'MAINTENANCE_DURATION': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'MAINTENANCE_DURATION'"
+        ),
+        'WARRANTY_YEARS': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'WARRANTY_YEARS'"
+        ),
+        'PAYMENT_TERMS': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'PAYMENT_TERMS'"
+        ),
+        'LOCAL_CONTENT_PERCENT': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'LOCAL_CONTENT_PERCENT'"
+        )
+    }
     
     policies = [
-        # GLOBAL policies (apply to all domains)
+        # RAIL_HVAC domain
         {
-            "dimension": DimensionEnum.MAINTENANCE_DURATION,
-            "domain": "GLOBAL",
-            "max_value": 24,  # max 24 hour maintenance window
-            "flexibility": FlexibilityEnum.fixed,
-            "notes": "Strict maintenance window requirement across all domains"
+            'dimension_id': dimensions['MAINTENANCE_DURATION'],
+            'dimension_name': 'Maintenance Duration',
+            'domain': 'RAIL_HVAC',
+            'min_value': 3.0,
+            'max_value': 5.0,
+            'default_value': 4.0,
+            'flexibility': 'negotiable',
+            'notes': 'Our rail HVAC maintenance capacity is optimized for 3-5 year contracts. Can extend to 6 years with advance planning.'
         },
         {
-            "dimension": DimensionEnum.WARRANTY_YEARS,
-            "domain": "GLOBAL",
-            "max_value": 5,  # willing to offer up to 5 year warranty
-            "flexibility": FlexibilityEnum.flexible,
-            "notes": "Can negotiate warranty duration depending on pricing"
+            'dimension_id': dimensions['WARRANTY_YEARS'],
+            'dimension_name': 'Warranty Period',
+            'domain': 'RAIL_HVAC',
+            'min_value': 2.0,
+            'max_value': 3.0,
+            'default_value': 2.0,
+            'flexibility': 'fixed',
+            'notes': 'Standard warranty coverage for HVAC systems. Component manufacturers limit our flexibility here.'
         },
         {
-            "dimension": DimensionEnum.RESPONSE_TIME_HOURS,
-            "domain": "GLOBAL",
-            "max_value": 4,  # cannot promise faster than 4 hour response
-            "flexibility": FlexibilityEnum.conditional,
-            "notes": "Response time depends on support tier purchased"
+            'dimension_id': dimensions['PAYMENT_TERMS'],
+            'dimension_name': 'Payment Terms',
+            'domain': 'RAIL_HVAC',
+            'min_value': 30.0,
+            'max_value': 90.0,
+            'default_value': 60.0,
+            'flexibility': 'flexible',
+            'notes': 'Cash flow allows flexibility on payment terms for rail projects.'
         },
         {
-            "dimension": DimensionEnum.UPTIME_GUARANTEE,
-            "domain": "GLOBAL",
-            "max_value": 99.9,  # maximum 99.9% SLA
-            "flexibility": FlexibilityEnum.fixed,
-            "notes": "Cannot guarantee higher than 99.9% uptime"
-        },
-        {
-            "dimension": DimensionEnum.SUPPORT_AVAILABILITY,
-            "domain": "GLOBAL",
-            "max_value": 24,  # 24/7 support is maximum offering
-            "flexibility": FlexibilityEnum.flexible,
-            "notes": "Support hours negotiable based on contract tier"
-        },
-        {
-            "dimension": DimensionEnum.COMPLIANCE_LEVEL,
-            "domain": "GLOBAL",
-            "max_value": 4,  # ISO 27001, SOC2, HIPAA, PCI-DSS certified
-            "flexibility": FlexibilityEnum.fixed,
-            "notes": "Compliance certifications are fixed, not negotiable"
-        },
-        {
-            "dimension": DimensionEnum.PRICE_TOLERANCE,
-            "domain": "GLOBAL",
-            "max_value": 150000,  # willing to quote up to $150k/year
-            "flexibility": FlexibilityEnum.flexible,
-            "notes": "Price is flexible based on scope and commitment"
-        },
-        {
-            "dimension": DimensionEnum.DELIVERY_WINDOW_DAYS,
-            "domain": "GLOBAL",
-            "max_value": 90,  # minimum 90 day delivery window
-            "flexibility": FlexibilityEnum.conditional,
-            "notes": "Delivery depends on complexity and resource availability"
+            'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+            'dimension_name': 'Local Content',
+            'domain': 'RAIL_HVAC',
+            'min_value': 35.0,
+            'max_value': 55.0,
+            'default_value': 45.0,
+            'flexibility': 'negotiable',
+            'notes': 'Local supply chain well-established for rail HVAC. Can push to 60% with advance notice.'
         },
         
-        # Domain-specific policies (infrastructure)
+        # POWER_GRID domain
         {
-            "dimension": DimensionEnum.UPTIME_GUARANTEE,
-            "domain": "infrastructure",
-            "max_value": 99.95,  # higher guarantee for infrastructure
-            "flexibility": FlexibilityEnum.fixed,
-            "notes": "Infrastructure services have stricter uptime requirements"
+            'dimension_id': dimensions['MAINTENANCE_DURATION'],
+            'dimension_name': 'Maintenance Duration',
+            'domain': 'POWER_GRID',
+            'min_value': 2.0,
+            'max_value': 4.0,
+            'default_value': 3.0,
+            'flexibility': 'fixed',
+            'notes': 'Power grid maintenance requires specialized team. Limited capacity beyond 4 years.'
         },
         {
-            "dimension": DimensionEnum.RESPONSE_TIME_HOURS,
-            "domain": "infrastructure",
-            "max_value": 2,  # faster response for infrastructure
-            "flexibility": FlexibilityEnum.fixed,
-            "notes": "Infrastructure issues need immediate response"
+            'dimension_id': dimensions['WARRANTY_YEARS'],
+            'dimension_name': 'Warranty Period',
+            'domain': 'POWER_GRID',
+            'min_value': 1.0,
+            'max_value': 2.0,
+            'default_value': 1.0,
+            'flexibility': 'fixed',
+            'notes': 'Power infrastructure has higher risk. Conservative warranty policy.'
+        },
+        {
+            'dimension_id': dimensions['PAYMENT_TERMS'],
+            'dimension_name': 'Payment Terms',
+            'domain': 'POWER_GRID',
+            'min_value': 30.0,
+            'max_value': 60.0,
+            'default_value': 45.0,
+            'flexibility': 'negotiable',
+            'notes': 'Power projects have tighter cash requirements.'
+        },
+        {
+            'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+            'dimension_name': 'Local Content',
+            'domain': 'POWER_GRID',
+            'min_value': 25.0,
+            'max_value': 40.0,
+            'default_value': 30.0,
+            'flexibility': 'negotiable',
+            'notes': 'Specialized power components often imported. Limited local options.'
         },
         
-        # Domain-specific policies (cloud)
+        # GLOBAL fallback policies
         {
-            "dimension": DimensionEnum.COMPLIANCE_LEVEL,
-            "domain": "cloud",
-            "max_value": 5,  # higher compliance for cloud services
-            "flexibility": FlexibilityEnum.fixed,
-            "notes": "Cloud services require additional compliance certifications"
+            'dimension_id': dimensions['MAINTENANCE_DURATION'],
+            'dimension_name': 'Maintenance Duration',
+            'domain': 'GLOBAL',
+            'min_value': 2.0,
+            'max_value': 5.0,
+            'default_value': 3.0,
+            'flexibility': 'flexible',
+            'notes': 'Default maintenance policy across all domains.'
         },
         {
-            "dimension": DimensionEnum.DELIVERY_WINDOW_DAYS,
-            "domain": "cloud",
-            "max_value": 30,  # faster delivery for cloud
-            "flexibility": FlexibilityEnum.flexible,
-            "notes": "Cloud offerings can be deployed quickly"
+            'dimension_id': dimensions['WARRANTY_YEARS'],
+            'dimension_name': 'Warranty Period',
+            'domain': 'GLOBAL',
+            'min_value': 1.0,
+            'max_value': 3.0,
+            'default_value': 2.0,
+            'flexibility': 'negotiable',
+            'notes': 'Standard warranty policy.'
         },
+        {
+            'dimension_id': dimensions['PAYMENT_TERMS'],
+            'dimension_name': 'Payment Terms',
+            'domain': 'GLOBAL',
+            'min_value': 30.0,
+            'max_value': 90.0,
+            'default_value': 60.0,
+            'flexibility': 'flexible',
+            'notes': 'Standard payment terms across domains.'
+        },
+        {
+            'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+            'dimension_name': 'Local Content',
+            'domain': 'GLOBAL',
+            'min_value': 30.0,
+            'max_value': 50.0,
+            'default_value': 40.0,
+            'flexibility': 'negotiable',
+            'notes': 'Default local content target.'
+        }
     ]
     
-    for policy_data in policies:
-        policy = VendorPolicy(
-            vendor_id=vendor_id,
-            dimension=policy_data["dimension"],
-            domain=policy_data["domain"],
-            max_value=policy_data["max_value"],
-            flexibility=policy_data["flexibility"],
-            notes=policy_data["notes"],
-            effective_from=date.today()
+    for policy in policies:
+        # Generate embedding
+        embedding = generate_policy_embedding(
+            dimension_name=policy['dimension_name'],
+            domain=policy['domain'],
+            min_value=policy['min_value'],
+            max_value=policy['max_value'],
+            flexibility=policy['flexibility'],
+            notes=policy['notes']
         )
-        db.add(policy)
-    
-    db.commit()
-    print(f"✓ Created {len(policies)} vendor policies")
-
-def seed_historical_proposals(db, vendor_id):
-    """
-    Create 8 historical proposals showing past bids and outcomes.
-    
-    Mix of WON, LOST, and REJECTED proposals to show reasoning patterns.
-    """
-    print("\n📝 Seeding Historical Proposals...")
-    
-    proposals_data = [
-        {
-            "year": 2025,
-            "outcome": OutcomeEnum.WON,
-            "summary": "Cloud infrastructure platform for e-commerce platform",
-            "outcome_reason": "Met all requirements with competitive pricing and excellent support terms",
-            "decisions": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "value": 12, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "value": 3, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "value": 2, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "value": 99.95, "nature": NatureEnum.conditional, "confidence": 0.85},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "value": 24, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "value": 4, "nature": NatureEnum.default, "confidence": 1.0},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "value": 85000, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "value": 45, "nature": NatureEnum.default, "confidence": 0.90},
-            ]
-        },
-        {
-            "year": 2024,
-            "outcome": OutcomeEnum.LOST,
-            "summary": "Enterprise storage infrastructure for healthcare provider",
-            "outcome_reason": "Competitor offered higher uptime SLA (99.99%) at lower price point",
-            "decisions": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "value": 16, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "value": 4, "nature": NatureEnum.default, "confidence": 0.88},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "value": 3, "nature": NatureEnum.conditional, "confidence": 0.80, "violation": True},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "value": 99.9, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "value": 24, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "value": 4, "nature": NatureEnum.default, "confidence": 1.0},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "value": 120000, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "value": 60, "nature": NatureEnum.default, "confidence": 0.85},
-            ]
-        },
-        {
-            "year": 2024,
-            "outcome": OutcomeEnum.WON,
-            "summary": "Managed cloud services for financial services firm",
-            "outcome_reason": "Best combination of compliance, uptime, and responsive support",
-            "decisions": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "value": 8, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "value": 5, "nature": NatureEnum.default, "confidence": 0.92},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "value": 1, "nature": NatureEnum.exception, "confidence": 0.88},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "value": 99.99, "nature": NatureEnum.conditional, "confidence": 0.90},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "value": 24, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "value": 5, "nature": NatureEnum.default, "confidence": 1.0},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "value": 140000, "nature": NatureEnum.default, "confidence": 0.85},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "value": 30, "nature": NatureEnum.default, "confidence": 0.95},
-            ]
-        },
-        {
-            "year": 2023,
-            "outcome": OutcomeEnum.REJECTED,
-            "summary": "Infrastructure services request (internal rejection)",
-            "outcome_reason": "Decided to focus on cloud offerings instead; not pursuing infrastructure bids",
-            "decisions": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "value": 6, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "value": 3, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "value": 1, "nature": NatureEnum.exception, "confidence": 0.95},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "value": 99.95, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "value": 24, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "value": 3, "nature": NatureEnum.default, "confidence": 0.80},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "value": 75000, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "value": 60, "nature": NatureEnum.default, "confidence": 0.85},
-            ]
-        },
-        {
-            "year": 2023,
-            "outcome": OutcomeEnum.WON,
-            "summary": "Cloud migration services for retail company",
-            "outcome_reason": "Strong technical fit, competitive pricing, and proven migration track record",
-            "decisions": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "value": 10, "nature": NatureEnum.default, "confidence": 0.92},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "value": 2, "nature": NatureEnum.default, "confidence": 0.85},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "value": 3, "nature": NatureEnum.default, "confidence": 0.88},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "value": 99.9, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "value": 24, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "value": 3, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "value": 95000, "nature": NatureEnum.default, "confidence": 0.92},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "value": 60, "nature": NatureEnum.default, "confidence": 0.90},
-            ]
-        },
-        {
-            "year": 2023,
-            "outcome": OutcomeEnum.LOST,
-            "summary": "Government infrastructure contract (security clearance required)",
-            "outcome_reason": "Could not meet security/compliance requirements; competitor had existing certifications",
-            "decisions": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "value": 4, "nature": NatureEnum.exception, "confidence": 0.95},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "value": 5, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "value": 1, "nature": NatureEnum.exception, "confidence": 0.95},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "value": 99.99, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "value": 24, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "value": 4, "nature": NatureEnum.default, "confidence": 0.70, "violation": True},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "value": 130000, "nature": NatureEnum.default, "confidence": 0.85},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "value": 45, "nature": NatureEnum.default, "confidence": 0.85},
-            ]
-        },
-        {
-            "year": 2022,
-            "outcome": OutcomeEnum.WON,
-            "summary": "Managed services platform for media & entertainment",
-            "outcome_reason": "Cost-effective solution with flexible pricing tiers",
-            "decisions": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "value": 12, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "value": 2, "nature": NatureEnum.default, "confidence": 0.88},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "value": 4, "nature": NatureEnum.default, "confidence": 0.85},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "value": 99.5, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "value": 16, "nature": NatureEnum.conditional, "confidence": 0.85},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "value": 2, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "value": 65000, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "value": 90, "nature": NatureEnum.default, "confidence": 0.85},
-            ]
-        },
-        {
-            "year": 2022,
-            "outcome": OutcomeEnum.LOST,
-            "summary": "Premium SaaS platform for insurance industry",
-            "outcome_reason": "Required higher uptime SLA and compliance level; couldn't match terms",
-            "decisions": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "value": 4, "nature": NatureEnum.conditional, "confidence": 0.85},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "value": 3, "nature": NatureEnum.default, "confidence": 0.88},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "value": 2, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "value": 99.95, "nature": NatureEnum.default, "confidence": 0.90},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "value": 24, "nature": NatureEnum.default, "confidence": 0.95},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "value": 4, "nature": NatureEnum.default, "confidence": 0.80, "violation": True},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "value": 110000, "nature": NatureEnum.default, "confidence": 0.88},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "value": 60, "nature": NatureEnum.default, "confidence": 0.85},
-            ]
-        },
-    ]
-    
-    for proposal_data in proposals_data:
-        proposal = Proposal(
-            vendor_id=vendor_id,
-            year=proposal_data["year"],
-            outcome=proposal_data["outcome"],
-            outcome_reason=proposal_data["outcome_reason"],
-            proposal_summary=proposal_data["summary"]
-        )
-        db.add(proposal)
-        db.flush()  # Get the proposal ID
         
-        # Add decisions for this proposal
-        for decision_data in proposal_data["decisions"]:
-            decision = ProposalDecision(
-                proposal_id=proposal.id,
-                dimension=decision_data["dimension"],
-                value=decision_data["value"],
-                nature=decision_data["nature"],
-                confidence=decision_data.get("confidence", 0.90),
-                violation_flag=decision_data.get("violation", False),
-                source_excerpt=f"Extracted from {proposal_data['summary']} proposal document"
+        # Convert embedding to PostgreSQL array format
+        embedding_str = "[" + ",".join(map(str, embedding)) + "]"
+        
+        policy_id = insert_and_return_id(
+            """
+            INSERT INTO vendor_policy 
+            (vendor_id, dimension_id, domain, min_value, max_value, default_value, flexibility, notes, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
+            """,
+            (
+                vendor_id,
+                policy['dimension_id'],
+                policy['domain'],
+                policy['min_value'],
+                policy['max_value'],
+                policy['default_value'],
+                policy['flexibility'],
+                policy['notes'],
+                embedding_str
             )
-            db.add(decision)
+        )
+        
+        print(f"  ✓ Policy: {policy['dimension_name']} / {policy['domain']}")
     
-    db.commit()
-    print(f"✓ Created {len(proposals_data)} historical proposals with decisions")
+    print(f"✓ Created {len(policies)} vendor policies\n")
 
-def seed_tenders(db):
-    """
-    Create 2 incoming tenders to evaluate.
+def seed_historical_proposals(vendor_id: int):
+    """Create historical proposals with decisions"""
+    print("Seeding historical proposals...")
     
-    These represent new RFP requests that need responses.
-    """
-    print("\n📮 Seeding Incoming Tenders...")
+    # Get dimension IDs
+    dimensions = {
+        'MAINTENANCE_DURATION': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'MAINTENANCE_DURATION'"
+        ),
+        'WARRANTY_YEARS': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'WARRANTY_YEARS'"
+        ),
+        'PAYMENT_TERMS': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'PAYMENT_TERMS'"
+        ),
+        'LOCAL_CONTENT_PERCENT': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'LOCAL_CONTENT_PERCENT'"
+        )
+    }
     
-    tenders_data = [
+    proposals = [
+        # WON proposals
         {
-            "tender_name": "RFP-2026-001: Enterprise Cloud Platform",
-            "domain": "cloud",
-            "year": 2026,
-            "summary": "Large enterprise cloud infrastructure and managed services for manufacturing conglomerate. Requires high availability, compliance certifications, and 24/7 support.",
-            "requirements": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "required_value": 8, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "required_value": 3, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "required_value": 2, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "required_value": 99.95, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "required_value": 24, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "required_value": 4, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "required_value": 120000, "strictness": StrictnessEnum.preferred},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "required_value": 45, "strictness": StrictnessEnum.mandatory},
+            'tender_name': '2023 Metro North Rail HVAC System',
+            'domain': 'RAIL_HVAC',
+            'outcome': 'WON',
+            'outcome_reason': 'Our 5-year maintenance commitment and competitive pricing won the contract.',
+            'submitted_at': datetime(2023, 3, 15),
+            'decisions': [
+                {
+                    'dimension_id': dimensions['MAINTENANCE_DURATION'],
+                    'dimension_name': 'Maintenance Duration',
+                    'offered_value': 5.0,
+                    'justification': 'Offered 5 years to match client preference and demonstrate long-term commitment.',
+                    'source_excerpt': 'Client emphasized importance of extended maintenance. We positioned this as a strength given our rail HVAC track record.'
+                },
+                {
+                    'dimension_id': dimensions['WARRANTY_YEARS'],
+                    'dimension_name': 'Warranty Period',
+                    'offered_value': 3.0,
+                    'justification': 'Extended warranty to maximum policy allows to strengthen proposal.',
+                    'source_excerpt': 'Pushed warranty to 3 years despite cost impact. Confidence in our HVAC quality justified the risk.'
+                },
+                {
+                    'dimension_id': dimensions['PAYMENT_TERMS'],
+                    'dimension_name': 'Payment Terms',
+                    'offered_value': 60.0,
+                    'justification': 'Standard 60-day terms accepted by client.',
+                    'source_excerpt': 'No pressure on payment terms. Went with standard 60 days.'
+                },
+                {
+                    'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+                    'dimension_name': 'Local Content',
+                    'offered_value': 48.0,
+                    'justification': 'Exceeded minimum requirement to score higher on local content criteria.',
+                    'source_excerpt': 'Client weighted local content heavily. Leveraged our regional supplier network to reach 48%.'
+                }
             ]
         },
         {
-            "tender_name": "RFP-2026-002: Managed Security Services",
-            "domain": "infrastructure",
-            "year": 2026,
-            "summary": "Managed security and infrastructure services for financial services firm. Focus on compliance, rapid incident response, and comprehensive monitoring.",
-            "requirements": [
-                {"dimension": DimensionEnum.MAINTENANCE_DURATION, "required_value": 4, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.WARRANTY_YEARS, "required_value": 2, "strictness": StrictnessEnum.preferred},
-                {"dimension": DimensionEnum.RESPONSE_TIME_HOURS, "required_value": 1, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.UPTIME_GUARANTEE, "required_value": 99.99, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.SUPPORT_AVAILABILITY, "required_value": 24, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.COMPLIANCE_LEVEL, "required_value": 5, "strictness": StrictnessEnum.mandatory},
-                {"dimension": DimensionEnum.PRICE_TOLERANCE, "required_value": 100000, "strictness": StrictnessEnum.preferred},
-                {"dimension": DimensionEnum.DELIVERY_WINDOW_DAYS, "required_value": 30, "strictness": StrictnessEnum.mandatory},
+            'tender_name': '2024 Eastern Suburbs Rail Climate Control',
+            'domain': 'RAIL_HVAC',
+            'outcome': 'WON',
+            'outcome_reason': 'Strong technical proposal with balanced maintenance terms.',
+            'submitted_at': datetime(2024, 6, 20),
+            'decisions': [
+                {
+                    'dimension_id': dimensions['MAINTENANCE_DURATION'],
+                    'dimension_name': 'Maintenance Duration',
+                    'offered_value': 4.0,
+                    'justification': 'Balanced commitment within policy comfort zone.',
+                    'source_excerpt': '4 years aligned with our capacity planning and client expectations.'
+                },
+                {
+                    'dimension_id': dimensions['WARRANTY_YEARS'],
+                    'dimension_name': 'Warranty Period',
+                    'offered_value': 2.0,
+                    'justification': 'Standard warranty sufficient for this project scale.',
+                    'source_excerpt': 'Standard 2-year warranty. No client pressure for extension.'
+                },
+                {
+                    'dimension_id': dimensions['PAYMENT_TERMS'],
+                    'dimension_name': 'Payment Terms',
+                    'offered_value': 75.0,
+                    'justification': 'Client requested extended terms, we accommodated within policy.',
+                    'source_excerpt': 'Client needed 75-day terms for budget cycles. Acceptable under our flexible payment policy.'
+                },
+                {
+                    'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+                    'dimension_name': 'Local Content',
+                    'offered_value': 45.0,
+                    'justification': 'Met requirement with standard supply chain.',
+                    'source_excerpt': 'Our default 45% local content met the 40% requirement comfortably.'
+                }
             ]
         },
+        {
+            'tender_name': '2024 Central Power Grid Expansion',
+            'domain': 'POWER_GRID',
+            'outcome': 'WON',
+            'outcome_reason': 'Technical excellence and realistic commitments.',
+            'submitted_at': datetime(2024, 9, 10),
+            'decisions': [
+                {
+                    'dimension_id': dimensions['MAINTENANCE_DURATION'],
+                    'dimension_name': 'Maintenance Duration',
+                    'offered_value': 3.0,
+                    'justification': 'Standard 3-year maintenance for power infrastructure.',
+                    'source_excerpt': 'Power grid projects typically 3 years. Matches our specialized team capacity.'
+                },
+                {
+                    'dimension_id': dimensions['WARRANTY_YEARS'],
+                    'dimension_name': 'Warranty Period',
+                    'offered_value': 2.0,
+                    'justification': 'Extended to maximum policy for competitive edge.',
+                    'source_excerpt': 'Pushed to 2-year warranty despite higher risk. Needed competitive advantage.'
+                },
+                {
+                    'dimension_id': dimensions['PAYMENT_TERMS'],
+                    'dimension_name': 'Payment Terms',
+                    'offered_value': 45.0,
+                    'justification': 'Standard terms for power sector.',
+                    'source_excerpt': 'Government client preferred shorter payment cycles. 45 days worked for both parties.'
+                }
+            ]
+        },
+        
+        # LOST proposals (we submitted but didn't win)
+        {
+            'tender_name': '2023 Southern Rail Ventilation Upgrade',
+            'domain': 'RAIL_HVAC',
+            'outcome': 'LOST',
+            'outcome_reason': 'Competitor offered longer maintenance period at lower cost.',
+            'submitted_at': datetime(2023, 11, 5),
+            'decisions': [
+                {
+                    'dimension_id': dimensions['MAINTENANCE_DURATION'],
+                    'dimension_name': 'Maintenance Duration',
+                    'offered_value': 3.0,
+                    'justification': 'Offered minimum policy duration due to capacity constraints.',
+                    'source_excerpt': 'Team capacity limited. Could only commit to 3 years despite client preference for 5+.'
+                },
+                {
+                    'dimension_id': dimensions['WARRANTY_YEARS'],
+                    'dimension_name': 'Warranty Period',
+                    'offered_value': 2.0,
+                    'justification': 'Standard warranty offered.',
+                    'source_excerpt': 'Standard 2-year warranty. In retrospect, should have extended to 3 years.'
+                },
+                {
+                    'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+                    'dimension_name': 'Local Content',
+                    'offered_value': 38.0,
+                    'justification': 'Met minimum but competitor exceeded significantly.',
+                    'source_excerpt': 'Offered 38% local content. Competitor went to 55% which was decisive.'
+                }
+            ]
+        },
+        {
+            'tender_name': '2024 Western Power Substation',
+            'domain': 'POWER_GRID',
+            'outcome': 'LOST',
+            'outcome_reason': 'Lost on technical evaluation, not commercial terms.',
+            'submitted_at': datetime(2024, 4, 12),
+            'decisions': [
+                {
+                    'dimension_id': dimensions['MAINTENANCE_DURATION'],
+                    'dimension_name': 'Maintenance Duration',
+                    'offered_value': 2.0,
+                    'justification': 'Minimum maintenance due to specialized requirements.',
+                    'source_excerpt': 'Substation work requires specialist team. Limited to 2 years.'
+                },
+                {
+                    'dimension_id': dimensions['WARRANTY_YEARS'],
+                    'dimension_name': 'Warranty Period',
+                    'offered_value': 1.0,
+                    'justification': 'Conservative warranty for high-risk infrastructure.',
+                    'source_excerpt': 'High voltage work carries significant risk. Held at 1-year warranty.'
+                }
+            ]
+        },
+        
+        # REJECTED proposals (we withdrew before submission)
+        {
+            'tender_name': '2024 Airport Rail Link HVAC',
+            'domain': 'RAIL_HVAC',
+            'outcome': 'REJECTED',
+            'outcome_reason': 'Payment terms unacceptable (120+ days), withdrew from tender.',
+            'submitted_at': datetime(2024, 2, 28),
+            'decisions': [
+                {
+                    'dimension_id': dimensions['PAYMENT_TERMS'],
+                    'dimension_name': 'Payment Terms',
+                    'offered_value': 90.0,
+                    'justification': 'Client demanded 120 days, we countered with 90, ultimately withdrew.',
+                    'source_excerpt': 'Client insisted on 120-day terms which exceeds our cash flow tolerance. Could only offer 90 days maximum. Declined to proceed.'
+                },
+                {
+                    'dimension_id': dimensions['MAINTENANCE_DURATION'],
+                    'dimension_name': 'Maintenance Duration',
+                    'offered_value': 6.0,
+                    'justification': 'Client required 6 years which stretches our capacity.',
+                    'source_excerpt': 'Required 6-year maintenance exceeded our comfort zone. Combined with payment terms, made project unviable.'
+                }
+            ]
+        },
+        {
+            'tender_name': '2023 Industrial Complex Power',
+            'domain': 'POWER_GRID',
+            'outcome': 'REJECTED',
+            'outcome_reason': 'Warranty requirements exceeded our risk tolerance.',
+            'submitted_at': datetime(2023, 8, 18),
+            'decisions': [
+                {
+                    'dimension_id': dimensions['WARRANTY_YEARS'],
+                    'dimension_name': 'Warranty Period',
+                    'offered_value': 2.0,
+                    'justification': 'Client demanded 5-year warranty, we could not justify risk.',
+                    'source_excerpt': 'Client required 5-year warranty on power infrastructure. Our maximum is 2 years. Risk assessment showed unacceptable exposure. Withdrew.'
+                },
+                {
+                    'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+                    'dimension_name': 'Local Content',
+                    'offered_value': 25.0,
+                    'justification': 'Client required 60% local content, beyond our supply chain capability.',
+                    'source_excerpt': 'Required 60% local content impossible with specialized power equipment. Our maximum is 40%. Rejected.'
+                }
+            ]
+        }
     ]
     
-    for tender_data in tenders_data:
-        tender = Tender(
-            tender_name=tender_data["tender_name"],
-            domain=tender_data["domain"],
-            year=tender_data["year"],
-            tender_summary=tender_data["summary"]
+    for proposal_data in proposals:
+        # Generate proposal embedding
+        proposal_embedding = generate_proposal_embedding(
+            tender_name=proposal_data['tender_name'],
+            domain=proposal_data['domain'],
+            outcome=proposal_data['outcome'],
+            outcome_reason=proposal_data['outcome_reason']
         )
-        db.add(tender)
-        db.flush()  # Get the tender ID
         
-        # Add requirements for this tender
-        for req_data in tender_data["requirements"]:
-            requirement = TenderRequirement(
-                tender_id=tender.id,
-                dimension=req_data["dimension"],
-                required_value=req_data["required_value"],
-                strictness=req_data["strictness"]
+        proposal_embedding_str = "[" + ",".join(map(str, proposal_embedding)) + "]"
+        
+        # Insert proposal
+        proposal_id = insert_and_return_id(
+            """
+            INSERT INTO proposals 
+            (vendor_id, tender_name, domain, outcome, outcome_reason, submitted_at, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::vector)
+            """,
+            (
+                vendor_id,
+                proposal_data['tender_name'],
+                proposal_data['domain'],
+                proposal_data['outcome'],
+                proposal_data['outcome_reason'],
+                proposal_data['submitted_at'],
+                proposal_embedding_str
             )
-            db.add(requirement)
+        )
+        
+        print(f"  ✓ Proposal: {proposal_data['tender_name']} ({proposal_data['outcome']})")
+        
+        # Insert proposal decisions
+        for decision in proposal_data['decisions']:
+            decision_embedding = generate_decision_embedding(
+                dimension_name=decision['dimension_name'],
+                offered_value=float(decision['offered_value']),
+                justification=decision['justification'],
+                domain=proposal_data['domain'],
+                outcome=proposal_data['outcome'],
+                source_excerpt=decision['source_excerpt']
+            )
+            
+            decision_embedding_str = "[" + ",".join(map(str, decision_embedding)) + "]"
+            
+            insert_and_return_id(
+                """
+                INSERT INTO proposal_decisions
+                (proposal_id, dimension_id, offered_value, justification, source_excerpt, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s::vector)
+                """,
+                (
+                    proposal_id,
+                    decision['dimension_id'],
+                    decision['offered_value'],
+                    decision['justification'],
+                    decision['source_excerpt'],
+                    decision_embedding_str
+                )
+            )
+        
+        print(f"    → {len(proposal_data['decisions'])} decisions recorded")
     
-    db.commit()
-    print(f"✓ Created {len(tenders_data)} incoming tenders with requirements")
+    print(f"\n✓ Created {len(proposals)} historical proposals\n")
+
+def seed_demo_tenders():
+    """Create two demo tenders for live evaluation"""
+    print("Seeding demo tenders...")
+    
+    # Get dimension IDs
+    dimensions = {
+        'MAINTENANCE_DURATION': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'MAINTENANCE_DURATION'"
+        ),
+        'WARRANTY_YEARS': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'WARRANTY_YEARS'"
+        ),
+        'PAYMENT_TERMS': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'PAYMENT_TERMS'"
+        ),
+        'LOCAL_CONTENT_PERCENT': fetch_one_value(
+            "SELECT id FROM evaluation_dimension WHERE key = 'LOCAL_CONTENT_PERCENT'"
+        )
+    }
+    
+    tenders = [
+        {
+            'name': '2025 Regional Rail HVAC Modernization',
+            'domain': 'RAIL_HVAC',
+            'year': 2025,
+            'status': 'OPEN',
+            'requirements': [
+                {
+                    'dimension_id': dimensions['MAINTENANCE_DURATION'],
+                    'dimension_name': 'Maintenance Duration',
+                    'required_value': 4.0,
+                    'strictness': 'mandatory',
+                    'description': 'Minimum 4-year maintenance contract required to ensure system reliability through warranty period.'
+                },
+                {
+                    'dimension_id': dimensions['WARRANTY_YEARS'],
+                    'dimension_name': 'Warranty Period',
+                    'required_value': 2.0,
+                    'strictness': 'preferred',
+                    'description': 'Preference for 2+ year warranty but not mandatory.'
+                },
+                {
+                    'dimension_id': dimensions['PAYMENT_TERMS'],
+                    'dimension_name': 'Payment Terms',
+                    'required_value': 90.0,
+                    'strictness': 'mandatory',
+                    'description': 'Government budget cycles require 90-day payment terms minimum.'
+                },
+                {
+                    'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+                    'dimension_name': 'Local Content',
+                    'required_value': 40.0,
+                    'strictness': 'preferred',
+                    'description': 'Target 40% local content for economic development goals.'
+                }
+            ]
+        },
+        {
+            'name': '2025 City Metro Expansion - Climate Control',
+            'domain': 'RAIL_HVAC',
+            'year': 2025,
+            'status': 'OPEN',
+            'requirements': [
+                {
+                    'dimension_id': dimensions['MAINTENANCE_DURATION'],
+                    'dimension_name': 'Maintenance Duration',
+                    'required_value': 6.0,
+                    'strictness': 'mandatory',
+                    'description': 'Extended 6-year maintenance required for whole-of-life support model.'
+                },
+                {
+                    'dimension_id': dimensions['WARRANTY_YEARS'],
+                    'dimension_name': 'Warranty Period',
+                    'required_value': 3.0,
+                    'strictness': 'mandatory',
+                    'description': 'Minimum 3-year warranty mandatory for this critical infrastructure.'
+                },
+                {
+                    'dimension_id': dimensions['PAYMENT_TERMS'],
+                    'dimension_name': 'Payment Terms',
+                    'required_value': 60.0,
+                    'strictness': 'preferred',
+                    'description': 'Standard 60-day payment terms preferred.'
+                },
+                {
+                    'dimension_id': dimensions['LOCAL_CONTENT_PERCENT'],
+                    'dimension_name': 'Local Content',
+                    'required_value': 50.0,
+                    'strictness': 'preferred',
+                    'description': 'Target 50% local content for job creation.'
+                }
+            ]
+        }
+    ]
+    
+    for tender_data in tenders:
+        # Insert tender
+        tender_id = insert_and_return_id(
+            """
+            INSERT INTO tenders (name, domain, year, status)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (tender_data['name'], tender_data['domain'], tender_data['year'], tender_data['status'])
+        )
+        
+        print(f"  ✓ Tender: {tender_data['name']}")
+        
+        # Insert requirements
+        for req in tender_data['requirements']:
+            req_embedding = generate_requirement_embedding(
+                dimension_name=req['dimension_name'],
+                required_value=float(req['required_value']),
+                strictness=req['strictness'],
+                domain=tender_data['domain'],
+                description=req['description']
+            )
+            
+            req_embedding_str = "[" + ",".join(map(str, req_embedding)) + "]"
+            
+            insert_and_return_id(
+                """
+                INSERT INTO tender_requirements
+                (tender_id, dimension_id, required_value, strictness, description, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s::vector)
+                """,
+                (
+                    tender_id,
+                    req['dimension_id'],
+                    req['required_value'],
+                    req['strictness'],
+                    req['description'],
+                    req_embedding_str
+                )
+            )
+        
+        print(f"    → {len(tender_data['requirements'])} requirements added")
+    
+    print(f"\n✓ Created {len(tenders)} demo tenders\n")
 
 def main():
-    """Seed all data."""
-    db = SessionLocal()
+    """Main seed execution"""
+    print("=" * 60)
+    print("DecisionLedger - Seed Data Generator")
+    print("=" * 60)
+    print()
     
     try:
-        print("\n" + "="*60)
-        print("DecisionLedger - Seed Mock Data")
-        print("="*60)
+        # Clear existing data
+        clear_existing_data()
         
-        # Get or create vendor
-        vendor = db.query(Vendor).filter(Vendor.name == "TechVendor Solutions").first()
-        if not vendor:
-            print("\n✗ Vendor 'TechVendor Solutions' not found!")
-            print("  Run docker-compose up first to initialize database.")
-            sys.exit(1)
+        # Seed in order (respecting foreign keys)
+        vendor_id = seed_vendor()
+        seed_vendor_policies(vendor_id)
+        seed_historical_proposals(vendor_id)
+        seed_demo_tenders()
         
-        vendor_id = vendor.id
-        print(f"\n✓ Found vendor: {vendor.name} (ID: {vendor_id})")
-        
-        # Seed policies
-        seed_vendor_policies(db, vendor_id)
-        
-        # Seed historical proposals
-        seed_historical_proposals(db, vendor_id)
-        
-        # Seed tenders
-        seed_tenders(db)
-        
-        print("\n" + "="*60)
-        print("✓ All mock data seeded successfully!")
-        print("="*60 + "\n")
+        print("=" * 60)
+        print("✓ SEEDING COMPLETE")
+        print("=" * 60)
+        print()
+        print("Next steps:")
+        print("1. Run: uvicorn app.main:app --reload")
+        print("2. Open: http://localhost:8000")
+        print("3. Explore:")
+        print("   - /history (view historical proposals)")
+        print("   - /tender/1 (evaluate first demo tender)")
+        print("   - /tender/2 (see persistence in action)")
+        print()
         
     except Exception as e:
         print(f"\n✗ Seeding failed: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
-    finally:
-        db.close()
 
 if __name__ == "__main__":
     main()
