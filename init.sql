@@ -21,6 +21,7 @@ CREATE TABLE evaluation_dimension (
     key dimension_key UNIQUE NOT NULL,
     display_name VARCHAR(100) NOT NULL,
     unit VARCHAR(20) NOT NULL
+    data_type VARCHAR(16) NOT NULL DEFAULT 'NUMERIC'
 );
 
 -- Insert fixed dimensions
@@ -140,3 +141,4 @@ SELECT
     ed.unit as dimension_unit
 FROM vendor_policy vp
 JOIN evaluation_dimension ed ON vp.dimension_id = ed.id;
+

@@ -1,0 +1,1291 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tender.name }} - Canvas{% endblock %}
+
+{% block extra_css %}
+<style>
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+    
+    body {
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #f0f0f0;
+    }
+    
+    /* Upload Overlay */
+    .upload-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+    }
+    
+    .upload-box {
+        background: white;
+        padding: 50px;
+        border-radius: 16px;
+        text-align: center;
+        max-width: 500px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    
+    .upload-box h2 {
+        font-size: 28px;
+        margin-bottom: 15px;
+        color: #333;
+    }
+    
+    .upload-box p {
+        color: #666;
+        margin-bottom: 30px;
+        font-size: 15px;
+        line-height: 1.6;
+    }
+    
+    .upload-btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 18px 40px;
+        border: none;
+        border-radius: 10px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+    
+    .upload-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    }
+    
+    .processing {
+        display: none;
+        margin-top: 25px;
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 8px;
+    }
+    
+    .processing.show {
+        display: block;
+    }
+    
+    .processing p {
+        margin: 5px 0;
+    }
+    
+    .spinner {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #667eea;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-right: 10px;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    /* Success Modal */
+    .success-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 10001;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .success-modal.show {
+        display: flex;
+    }
+    
+    .success-content {
+        background: white;
+        padding: 50px;
+        border-radius: 16px;
+        text-align: center;
+        max-width: 500px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    
+    .success-content h2 {
+        font-size: 32px;
+        color: #28a745;
+        margin-bottom: 20px;
+    }
+    
+    .success-content p {
+        font-size: 16px;
+        color: #666;
+        margin-bottom: 30px;
+        line-height: 1.6;
+    }
+    
+    .success-actions {
+        display: flex;
+        gap: 15px;
+        justify-content: center;
+    }
+    
+    .success-actions button {
+        padding: 15px 30px;
+        border: none;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    
+    .btn-view-tender {
+        background: #667eea;
+        color: white;
+    }
+    
+    .btn-view-tender:hover {
+        background: #5568d3;
+        transform: translateY(-2px);
+    }
+    
+    .btn-export-pdf {
+        background: #28a745;
+        color: white;
+    }
+    
+    .btn-export-pdf:hover {
+        background: #218838;
+        transform: translateY(-2px);
+    }
+    
+    .btn-close {
+        background: #6c757d;
+        color: white;
+    }
+    
+    .btn-close:hover {
+        background: #5a6268;
+        transform: translateY(-2px);
+    }
+    
+    /* Canvas Container */
+    .canvas-container {
+        display: grid;
+        grid-template-columns: 300px 1fr 440px;
+        height: 100vh;
+        gap: 0;
+    }
+    
+    /* LEFT SIDEBAR */
+    .fields-sidebar {
+        background: #f8f9fa;
+        border-right: 2px solid #dee2e6;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .sidebar-header {
+        padding: 25px;
+        background: white;
+        border-bottom: 2px solid #e9ecef;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    
+    .sidebar-header h3 {
+        font-size: 18px;
+        color: #333;
+        margin-bottom: 15px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    
+    .field-count {
+        background: #667eea;
+        color: white;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 13px;
+    }
+    
+    .legend {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        font-size: 13px;
+    }
+    
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    
+    .legend-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    
+    .legend-dot.green { background: #28a745; }
+    .legend-dot.yellow { background: #ffc107; }
+    .legend-dot.red { background: #dc3545; }
+    
+    .cards-container {
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+    }
+    
+    .field-card {
+        background: white;
+        border: 2px solid #e9ecef;
+        border-radius: 12px;
+        padding: 18px;
+        cursor: pointer;
+        transition: all 0.2s;
+        position: relative;
+    }
+    
+    .field-card:hover {
+        border-color: #667eea;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        transform: translateX(3px);
+    }
+    
+    .field-card.active {
+        border-color: #667eea;
+        background: #f0f4ff;
+        box-shadow: 0 6px 16px rgba(102, 126, 234, 0.25);
+    }
+    
+    .field-card-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+    }
+    
+    .status-indicator {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .status-indicator.green,
+    .status-indicator.GREEN { background: #28a745; }
+    
+    .status-indicator.yellow,
+    .status-indicator.YELLOW { background: #ffc107; }
+    
+    .status-indicator.red,
+    .status-indicator.RED { background: #dc3545; }
+    
+    .field-card-name {
+        font-weight: 600;
+        font-size: 15px;
+        color: #333;
+        flex: 1;
+    }
+    
+    .field-card-value {
+        font-size: 13px;
+        color: #666;
+        margin-top: 5px;
+        padding-left: 26px;
+    }
+    
+    /* CENTER - PDF Viewer */
+    .pdf-panel {
+        background: #3a3a3a;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .pdf-toolbar {
+        background: #2a2a2a;
+        padding: 15px 25px;
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        border-bottom: 2px solid #4a4a4a;
+    }
+    
+    .pdf-toolbar button {
+        background: #4a4a4a;
+        color: white;
+        border: none;
+        padding: 10px 18px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: all 0.2s;
+        font-weight: 500;
+    }
+    
+    .pdf-toolbar button:hover {
+        background: #5a5a5a;
+        transform: translateY(-1px);
+    }
+    
+    .pdf-page-info {
+        color: #ccc;
+        margin-left: auto;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    
+    .pdf-content {
+        flex: 1;
+        overflow: auto;
+        padding: 40px;
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+    }
+    
+    .pdf-page-container {
+        position: relative;
+        box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    
+    #pdfCanvas {
+        display: block;
+        background: white;
+    }
+    
+    .text-layer {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow: hidden;
+        opacity: 0;
+        line-height: 1;
+        user-select: text;
+    }
+    
+    .text-layer > span {
+        color: transparent;
+        position: absolute;
+        white-space: pre;
+        cursor: text;
+    }
+    
+    .highlight-layer {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        pointer-events: none;
+    }
+    
+    .highlight {
+        position: absolute;
+        border-radius: 3px;
+        opacity: 0.3;
+        cursor: pointer;
+        pointer-events: auto;
+        transition: opacity 0.2s;
+    }
+    
+    .highlight:hover {
+        opacity: 0.5;
+    }
+    
+    .highlight.green { background: #28a745; }
+    .highlight.yellow { background: #ffc107; }
+    .highlight.red { background: #dc3545; }
+    
+    /* RIGHT PANEL */
+    .details-panel {
+        background: white;
+        border-left: 2px solid #dee2e6;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .details-header {
+        padding: 25px;
+        border-bottom: 2px solid #e9ecef;
+        position: sticky;
+        top: 0;
+        background: white;
+        z-index: 10;
+    }
+    
+    .details-header h2 {
+        font-size: 20px;
+        color: #333;
+        margin-bottom: 5px;
+    }
+    
+    .field-meta {
+        font-size: 13px;
+        color: #999;
+    }
+    
+    .text-highlighted-section {
+        background: #fff9e6;
+        padding: 15px;
+        border-left: 4px solid #ffc107;
+        border-radius: 6px;
+        margin: 20px;
+        font-size: 14px;
+        color: #856404;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-style: italic;
+    }
+    
+    .text-highlighted-section:hover {
+        background: #fff3cd;
+        border-left-width: 6px;
+    }
+    
+    .loading-options {
+        padding: 40px 20px;
+        text-align: center;
+        color: #999;
+    }
+    
+    .options-section {
+        padding: 0 20px 20px 20px;
+    }
+    
+    .options-section h3 {
+        font-size: 15px;
+        font-weight: 600;
+        color: #555;
+        margin-bottom: 18px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .option-card {
+        background: #f8f9fa;
+        border: 2px solid #e9ecef;
+        border-radius: 10px;
+        padding: 18px;
+        margin-bottom: 15px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    
+    .option-card:hover {
+        border-color: #667eea;
+        background: #f0f4ff;
+        transform: translateX(3px);
+    }
+    
+    .option-card.selected {
+        border-color: #667eea;
+        background: #e7f3ff;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+    }
+    
+    .option-title {
+        font-weight: 600;
+        font-size: 15px;
+        color: #333;
+        margin-bottom: 8px;
+    }
+    
+    .option-details {
+        font-size: 14px;
+        color: #666;
+        margin-bottom: 6px;
+    }
+    
+    .option-rationale {
+        font-size: 12px;
+        color: #999;
+        font-style: italic;
+    }
+    
+    .manual-input-section {
+        margin: 20px;
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 10px;
+        border: 2px dashed #dee2e6;
+    }
+    
+    .manual-input-section label {
+        display: block;
+        font-size: 14px;
+        font-weight: 600;
+        color: #555;
+        margin-bottom: 10px;
+    }
+    
+    .input-with-save {
+        display: flex;
+        gap: 12px;
+    }
+    
+    .input-with-save input {
+        flex: 1;
+        padding: 12px;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        font-size: 15px;
+    }
+    
+    .input-with-save input:focus {
+        outline: none;
+        border-color: #667eea;
+    }
+    
+    .save-btn {
+        padding: 12px 24px;
+        background: #28a745;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.2s;
+        font-size: 14px;
+    }
+    
+    .save-btn:hover {
+        background: #218838;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+    }
+    
+    .final-save-btn {
+        width: calc(100% - 40px);
+        margin: 20px 20px 10px 20px;
+        padding: 18px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-size: 17px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+    }
+    
+    .final-save-btn:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+    }
+    
+    .export-pdf-btn {
+        width: calc(100% - 40px);
+        margin: 10px 20px 20px 20px;
+        padding: 15px;
+        background: #28a745;
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+    }
+    
+    .export-pdf-btn:hover {
+        background: #218838;
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(40, 167, 69, 0.4);
+    }
+    
+    .no-field-selected {
+        padding: 60px 30px;
+        text-align: center;
+        color: #999;
+    }
+    
+    .no-field-selected p {
+        margin: 10px 0;
+    }
+
+    .serial-badge {
+        background: #667eea;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 700;
+        margin-right: 8px;
+        display: inline-block;
+    }
+    
+    .page-badge {
+        background: #6c757d;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 10px;
+        margin-left: auto;
+    }
+    
+    .value-type-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        margin-left: 8px;
+    }
+    
+    .value-type-badge.numeric {
+        background: #e7f3ff;
+        color: #0066cc;
+    }
+    
+    .value-type-badge.boolean {
+        background: #e6f7e6;
+        color: #28a745;
+    }
+    
+    .value-type-badge.enum {
+        background: #fff3cd;
+        color: #856404;
+    }
+    
+    .value-type-badge.text {
+        background: #f8f9fa;
+        color: #495057;
+    }
+    
+    .field-card-ref {
+        font-size: 11px;
+        color: #999;
+        margin-top: 4px;
+        padding-left: 26px;
+        font-style: italic;
+    }
+    
+    .highlight-active {
+        position: absolute;
+        background: rgba(255, 193, 7, 0.5);
+        border: 2px solid #ffc107;
+        box-shadow: 0 0 10px rgba(255, 193, 7, 0.8);
+        pointer-events: none;
+        z-index: 100;
+        transition: all 0.3s;
+    }
+    
+    /* Boolean and Enum inputs */
+    .boolean-toggle {
+        display: flex;
+        gap: 15px;
+        margin-top: 10px;
+    }
+    
+    .toggle-option {
+        flex: 1;
+        padding: 12px;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-weight: 600;
+    }
+    
+    .toggle-option:hover {
+        border-color: #667eea;
+        background: #f0f4ff;
+    }
+    
+    .toggle-option.selected {
+        border-color: #28a745;
+        background: #d4edda;
+        color: #155724;
+    }
+    
+    .enum-select {
+        width: 100%;
+        padding: 12px;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        font-size: 15px;
+        margin-top: 10px;
+    }
+    
+    .enum-select:focus {
+        outline: none;
+        border-color: #667eea;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Upload Overlay -->
+<div class="upload-overlay" id="uploadOverlay">
+    <div class="upload-box">
+        <h2>📄 Upload Tender PDF</h2>
+        <p>
+            Upload the tender document to automatically extract requirements,<br>
+            match them against policy and historical data,<br>
+            and generate intelligent decision options.
+        </p>
+        
+        <input type="file" 
+               id="pdfFileInput" 
+               accept=".pdf" 
+               style="display: none;"
+               onchange="uploadPDF(event)">
+        
+        <button class="upload-btn" onclick="document.getElementById('pdfFileInput').click()">
+            📂 Choose PDF File
+        </button>
+        
+        <div class="processing" id="processing">
+            <div><span class="spinner"></span><strong>Processing PDF...</strong></div>
+            <p style="font-size: 13px; color: #666; margin-top: 10px;">
+                Using Groq AI to extract and structure all requirements
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- Success Modal -->
+<div class="success-modal" id="successModal">
+    <div class="success-content">
+        <h2>✅ Decisions Saved!</h2>
+        <p>
+            All your decisions have been successfully saved to the database.<br>
+            You can now export them as a PDF or view the tender details.
+        </p>
+        <div class="success-actions">
+            <button class="btn-export-pdf" onclick="exportDecisionsPDF()">
+                📄 Export PDF
+            </button>
+            <button class="btn-view-tender" onclick="window.location.href='/tender/{{ tender.id }}'">
+                👁️ View Tender
+            </button>
+            <button class="btn-close" onclick="closeSuccessModal()">
+                Close
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Canvas Container -->
+<div class="canvas-container" id="canvasContainer" style="display: none;">
+    <!-- LEFT SIDEBAR -->
+    <div class="fields-sidebar">
+        <div class="sidebar-header">
+            <h3>
+                📋 Extracted Fields
+                <span class="field-count" id="fieldCount">0</span>
+            </h3>
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-dot green"></div>
+                    <span>In policy range</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot yellow"></div>
+                    <span>Needs review</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot red"></div>
+                    <span>New field / Out of policy</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="cards-container" id="cardsContainer">
+            <!-- Populated after PDF upload -->
+        </div>
+    </div>
+    
+    <!-- CENTER: PDF Viewer -->
+    <div class="pdf-panel">
+        <div class="pdf-toolbar">
+            <button onclick="previousPage()">◀ Previous</button>
+            <button onclick="nextPage()">Next ▶</button>
+            <div class="pdf-page-info">
+                Page <span id="pageNum">1</span> of <span id="pageCount">-</span>
+            </div>
+            <button onclick="zoomIn()">🔍 Zoom In</button>
+            <button onclick="zoomOut()">🔍 Zoom Out</button>
+            <button onclick="resetZoom()">Reset</button>
+        </div>
+        
+        <div class="pdf-content">
+            <div class="pdf-page-container" id="pageContainer">
+                <canvas id="pdfCanvas"></canvas>
+                <div class="text-layer" id="textLayer"></div>
+                <div class="highlight-layer" id="highlightLayer"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- RIGHT PANEL -->
+    <div class="details-panel">
+        <div class="details-header">
+            <h2 id="selectedFieldTitle">Select a field</h2>
+            <div class="field-meta" id="fieldMeta"></div>
+        </div>
+        
+        <div id="fieldDetailsContent" style="display: none;">
+            <div id="highlightedText" class="text-highlighted-section" style="display: none;">
+                <!-- Extracted text context -->
+            </div>
+            
+            <div class="loading-options" id="loadingOptions" style="display: none;">
+                <span class="spinner"></span>
+                <p>Loading decision options...</p>
+            </div>
+            
+            <div class="options-section" id="optionsSection" style="display: none;">
+                <h3>Decision Options</h3>
+                <div id="optionsContainer">
+                    <!-- Options loaded dynamically -->
+                </div>
+            </div>
+            
+            <div class="manual-input-section" id="manualInputSection">
+                <!-- Dynamic input based on value type -->
+            </div>
+        </div>
+        
+        <div id="noFieldSelected" class="no-field-selected">
+            <p style="font-size: 18px;">👈</p>
+            <p><strong>Select a field card</strong></p>
+            <p style="font-size: 13px; margin-top: 10px;">
+                Click on an extracted field<br>to see decision options
+            </p>
+        </div>
+        
+        <button class="final-save-btn" onclick="finalSave()">
+            ✨ Save All Decisions
+        </button>
+        
+        <button class="export-pdf-btn" onclick="exportDecisionsPDF()">
+            📄 Export as PDF
+        </button>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+let pdfDoc = null;
+let pageNum = 1;
+let scale = 1.3;
+let extractedFields = [];
+let uploadedPdfBytes = null;
+let activeField = null;
+let highlights = [];
+
+// Upload and extract PDF
+async function uploadPDF(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    document.getElementById('processing').classList.add('show');
+    
+    const formData = new FormData();
+    formData.append('pdf_file', file);
+    
+    try {
+        const response = await fetch('/api/tender/{{ tender.id }}/upload-pdf', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            extractedFields = result.fields;
+            
+            // Load PDF for viewing
+            const fileReader = new FileReader();
+            fileReader.onload = async function() {
+                uploadedPdfBytes = new Uint8Array(this.result);
+                pdfDoc = await pdfjsLib.getDocument(uploadedPdfBytes).promise;
+                document.getElementById('pageCount').textContent = pdfDoc.numPages;
+                await renderPage(pageNum);
+                
+                // Hide overlay, show canvas
+                document.getElementById('uploadOverlay').style.display = 'none';
+                document.getElementById('canvasContainer').style.display = 'grid';
+                
+                // Render field cards
+                renderFieldCards();
+            };
+            fileReader.readAsArrayBuffer(file);
+        } else {
+            alert('❌ Error: ' + result.error);
+            document.getElementById('processing').classList.remove('show');
+        }
+    } catch (error) {
+        alert('❌ Upload failed: ' + error);
+        document.getElementById('processing').classList.remove('show');
+    }
+}
+
+function renderFieldCards() {
+    const container = document.getElementById('cardsContainer');
+    container.innerHTML = '';
+    
+    document.getElementById('fieldCount').textContent = extractedFields.length;
+    
+    extractedFields.forEach((field, index) => {
+        const statusClass = field.clarity_status.toLowerCase();
+        const valueTypeClass = field.value_type.toLowerCase();
+        
+        const card = document.createElement('div');
+        card.className = 'field-card';
+        card.dataset.dimension = field.dimension_key;
+        card.innerHTML = `
+            <div class="field-card-header">
+                <span class="serial-badge">#${field.serial_number}</span>
+                <div class="status-indicator ${statusClass}"></div>
+                <div class="field-card-name">${field.dimension_name}</div>
+                <span class="page-badge">p.${field.page_number}</span>
+            </div>
+            <div class="field-card-value">
+                ${formatValue(field.extracted_value, field.value_type)} ${field.dimension_unit}
+                <span class="value-type-badge ${valueTypeClass}">${field.value_type}</span>
+            </div>
+            <div class="field-card-ref">${field.requirement_reference}</div>
+        `;
+        card.onclick = () => selectField(field, index);
+        container.appendChild(card);
+        
+        // Auto-select first field
+        if (index === 0) {
+            setTimeout(() => selectField(field, index), 1000);
+        }
+    });
+}
+
+function formatValue(value, type) {
+    if (type === 'BOOLEAN') {
+        return value ? '✓ Yes' : '✗ No';
+    }
+    return value;
+}
+
+async function selectField(field, index) {
+    document.querySelectorAll('.field-card').forEach(c => c.classList.remove('active'));
+    document.querySelector(`[data-dimension="${field.dimension_key}"]`).classList.add('active');
+    
+    activeField = field;
+    
+    document.getElementById('selectedFieldTitle').textContent = field.dimension_name;
+    document.getElementById('fieldMeta').textContent = `Field ${field.serial_number} of ${extractedFields.length} • Page ${field.page_number}`;
+    document.getElementById('fieldDetailsContent').style.display = 'block';
+    document.getElementById('noFieldSelected').style.display = 'none';
+    
+    // Navigate to page where this requirement is
+    if (field.page_number !== pageNum) {
+        pageNum = field.page_number;
+        await renderPage(pageNum);
+    }
+    
+    // Highlight the text (simple implementation - you can enhance this)
+    highlightTextOnPage(field.extracted_text);
+    
+    // Show loading state
+    document.getElementById('loadingOptions').style.display = 'block';
+    document.getElementById('optionsSection').style.display = 'none';
+    
+    // Show extracted text
+    const highlightDiv = document.getElementById('highlightedText');
+    highlightDiv.style.display = 'block';
+    highlightDiv.textContent = `"${field.extracted_text}"`;
+    highlightDiv.onclick = () => {
+        if (field.page_number !== pageNum) {
+            pageNum = field.page_number;
+            renderPage(pageNum);
+        }
+    };
+    
+    // Render input based on value type
+    renderInputForValueType(field);
+    
+    // Load options from history
+    await loadOptions(field);
+}
+
+function highlightTextOnPage(text) {
+    // Clear existing highlights
+    document.getElementById('highlightLayer').innerHTML = '';
+    
+    // Simple highlight (you can enhance with better text search)
+    const textLayer = document.getElementById('textLayer');
+    const spans = textLayer.querySelectorAll('span');
+    
+    spans.forEach(span => {
+        if (span.textContent.includes(text.substring(0, 50))) {
+            const rect = span.getBoundingClientRect();
+            const container = document.getElementById('pageContainer').getBoundingClientRect();
+            
+            const highlight = document.createElement('div');
+            highlight.className = 'highlight-active';
+            highlight.style.left = (rect.left - container.left) + 'px';
+            highlight.style.top = (rect.top - container.top) + 'px';
+            highlight.style.width = rect.width + 'px';
+            highlight.style.height = rect.height + 'px';
+            
+            document.getElementById('highlightLayer').appendChild(highlight);
+        }
+    });
+}
+
+function renderInputForValueType(field) {
+    const container = document.getElementById('manualInputSection');
+    const valueType = field.value_type;
+    
+    if (valueType === 'NUMERIC') {
+        container.innerHTML = `
+            <label>💡 Custom Value</label>
+            <div class="input-with-save">
+                <input type="number" 
+                       id="manualValueInput" 
+                       step="0.01"
+                       value="${field.extracted_value}"
+                       placeholder="Enter numeric value">
+                <button class="save-btn" onclick="saveManualValue()">✓ Save</button>
+            </div>
+        `;
+    } else if (valueType === 'BOOLEAN') {
+        container.innerHTML = `
+            <label>💡 Confirm Decision</label>
+            <div class="boolean-toggle">
+                <div class="toggle-option ${field.extracted_value ? 'selected' : ''}" 
+                     onclick="selectBoolean(true)">
+                    ✓ Yes / True
+                </div>
+                <div class="toggle-option ${!field.extracted_value ? 'selected' : ''}" 
+                     onclick="selectBoolean(false)">
+                    ✗ No / False
+                </div>
+            </div>
+            <input type="hidden" id="manualValueInput" value="${field.extracted_value}">
+            <button class="save-btn" style="width: 100%; margin-top: 15px;" onclick="saveManualValue()">✓ Save Decision</button>
+        `;
+    } else if (valueType === 'ENUM') {
+        container.innerHTML = `
+            <label>💡 Select Option</label>
+            <select class="enum-select" id="manualValueInput">
+                <option value="${field.extracted_value}" selected>${field.extracted_value}</option>
+            </select>
+            <button class="save-btn" style="width: 100%; margin-top: 15px;" onclick="saveManualValue()">✓ Save</button>
+        `;
+    } else {
+        container.innerHTML = `
+            <label>💡 Custom Text Value</label>
+            <div class="input-with-save">
+                <input type="text" 
+                       id="manualValueInput" 
+                       value="${field.extracted_value}"
+                       placeholder="Enter text value">
+                <button class="save-btn" onclick="saveManualValue()">✓ Save</button>
+            </div>
+        `;
+    }
+}
+
+function selectBoolean(value) {
+    document.querySelectorAll('.toggle-option').forEach(opt => opt.classList.remove('selected'));
+    event.target.classList.add('selected');
+    document.getElementById('manualValueInput').value = value;
+}
+
+async function loadOptions(field) {
+    try {
+        const response = await fetch(
+            `/api/field/${field.dimension_key}/options?extracted_value=${field.extracted_value}&tender_domain={{ tender.domain }}`
+        );
+        const data = await response.json();
+        
+        document.getElementById('loadingOptions').style.display = 'none';
+        document.getElementById('optionsSection').style.display = 'block';
+        
+        const container = document.getElementById('optionsContainer');
+        container.innerHTML = '';
+        
+        if (data.options && data.options.length > 0) {
+            data.options.forEach((opt, idx) => {
+                const card = document.createElement('div');
+                card.className = 'option-card';
+                card.innerHTML = `
+                    <div class="option-title">${opt.title}</div>
+                    <div class="option-details">${opt.description}</div>
+                    <div class="option-rationale">${opt.rationale}</div>
+                `;
+                card.onclick = () => {
+                    document.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
+                    card.classList.add('selected');
+                    document.getElementById('manualValueInput').value = opt.value;
+                };
+                container.appendChild(card);
+                
+                if (idx === 0) {
+                    card.classList.add('selected');
+                    document.getElementById('manualValueInput').value = opt.value;
+                }
+            });
+        } else {
+            container.innerHTML = '<p style="color: #999; padding: 20px; text-align: center;">No historical options found.<br>Use the input below.</p>';
+        }
+    } catch (error) {
+        console.error('Error loading options:', error);
+        document.getElementById('loadingOptions').style.display = 'none';
+        document.getElementById('optionsSection').style.display = 'block';
+        document.getElementById('optionsContainer').innerHTML = '<p style="color: #dc3545; padding: 20px; text-align: center;">⚠️ Failed to load options.</p>';
+    }
+}
+
+async function renderPage(num) {
+    const page = await pdfDoc.getPage(num);
+    const viewport = page.getViewport({ scale });
+    
+    const canvas = document.getElementById('pdfCanvas');
+    const context = canvas.getContext('2d');
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+    
+    await page.render({ canvasContext: context, viewport }).promise;
+    
+    const textContent = await page.getTextContent();
+    const textLayer = document.getElementById('textLayer');
+    textLayer.innerHTML = '';
+    textLayer.style.width = viewport.width + 'px';
+    textLayer.style.height = viewport.height + 'px';
+    
+    pdfjsLib.renderTextLayer({
+        textContent: textContent,
+        container: textLayer,
+        viewport: viewport,
+        textDivs: []
+    });
+    
+    document.getElementById('pageNum').textContent = num;
+    
+    // Re-highlight if active field is on this page
+    if (activeField && activeField.page_number === num) {
+        setTimeout(() => highlightTextOnPage(activeField.extracted_text), 300);
+    }
+}
+
+function previousPage() {
+    if (pageNum > 1) {
+        pageNum--;
+        renderPage(pageNum);
+    }
+}
+
+function nextPage() {
+    if (pageNum < pdfDoc.numPages) {
+        pageNum++;
+        renderPage(pageNum);
+    }
+}
+
+function zoomIn() { scale += 0.2; renderPage(pageNum); }
+function zoomOut() { if (scale > 0.5) { scale -= 0.2; renderPage(pageNum); } }
+function resetZoom() { scale = 1.3; renderPage(pageNum); }
+
+async function saveManualValue() {
+    const value = document.getElementById('manualValueInput').value;
+    if (!value || !activeField) {
+        alert('⚠️ Please enter a value');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('tender_id', '{{ tender.id }}');
+    formData.append('dimension', activeField.dimension_key);
+    formData.append('final_value', value);
+    formData.append('user_notes', `[Page ${activeField.page_number}] ${activeField.requirement_reference}: ${activeField.extracted_value} → Decision: ${value}`);
+    
+    try {
+        await fetch('/api/decision/update', { method: 'POST', body: formData });
+        
+        const card = document.querySelector(`[data-dimension="${activeField.dimension_key}"]`);
+        card.querySelector('.status-indicator').className = 'status-indicator green';
+        
+        alert('✅ Decision saved successfully!');
+    } catch (error) {
+        alert('❌ Failed to save decision');
+    }
+}
+
+async function finalSave() {
+    const confirmed = confirm('💾 Save all decisions? This will finalize your selections.');
+    if (!confirmed) return;
+    
+    document.getElementById('successModal').classList.add('show');
+}
+
+function closeSuccessModal() {
+    document.getElementById('successModal').classList.remove('show');
+}
+
+async function exportDecisionsPDF() {
+    try {
+        const response = await fetch('/api/tender/{{ tender.id }}/export-decisions-pdf', {
+            method: 'POST'
+        });
+        
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `DecisionLedger_{{ tender.name | replace(' ', '_') }}_${new Date().toISOString().split('T')[0]}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            
+            alert('✅ PDF exported successfully!');
+        } else {
+            alert('❌ Failed to export PDF');
+        }
+    } catch (error) {
+        console.error('Export error:', error);
+        alert('❌ Export failed: ' + error);
+    }
+}
+</script>
+{% endblock %}
