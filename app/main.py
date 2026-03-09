@@ -195,7 +195,8 @@ async def tender_page(
         decision = decisions_store[tender_id][dimension]
         existing_decision = {
             'offered_value': decision['offered_value'],
-            'justification': decision['justification']
+            'justification': decision['justification'],
+            'requirement_value': decision.get('requirement_value', '')  # Include extracted requirement
         }
     
     return templates.TemplateResponse("tender.html", {
@@ -294,6 +295,8 @@ async def generate_proposal(tender_id: int):
     
     # Get all decisions from memory store
     decisions = []
+    processed_keys = set()
+    
     if tender_id in decisions_store:
         # Get tender requirements from DB to match with stored decisions
         requirements = fetch_all("""
@@ -311,6 +314,7 @@ async def generate_proposal(tender_id: int):
         
         for req in requirements:
             dim_key = req['key']
+            processed_keys.add(dim_key)
             if dim_key in decisions_store[tender_id]:
                 decision = decisions_store[tender_id][dim_key]
                 decisions.append({
@@ -320,6 +324,19 @@ async def generate_proposal(tender_id: int):
                     'justification': decision['justification'],
                     'required_value': req['required_value'],
                     'strictness': req['strictness']
+                })
+        
+        # Add newly extracted fields (not in database requirements)
+        for new_dim_key, decision_data in decisions_store[tender_id].items():
+            if new_dim_key not in processed_keys:
+                # This is a new field extracted from PDF that's not in the DB
+                decisions.append({
+                    'display_name': new_dim_key.replace('_', ' ').title(),
+                    'unit': 'N/A',
+                    'offered_value': decision_data['offered_value'],
+                    'justification': decision_data['justification'],
+                    'required_value': None,
+                    'strictness': 'NEW_FIELD'
                 })
     
     if not decisions:
@@ -590,26 +607,37 @@ async def api_reason(tender_id: int, dimension: str):
 async def api_update_decision(
     tender_id: int = Form(...),
     dimension: str = Form(...),
-    final_value: float = Form(...),
-    user_notes: str = Form(default="")
+    final_value: str = Form(...),
+    user_notes: str = Form(default=""),
+    requirement_value: str = Form(default=None)
 ):
     """
     API endpoint to save user's decision IN MEMORY (POC mode)
     Data is not persisted to database
+    Handles both numeric and boolean values
+    Stores extracted requirement value for new fields
     """
     try:
         # Initialize tender store if not exists
         if tender_id not in decisions_store:
             decisions_store[tender_id] = {}
         
+        # Try to convert to float, otherwise keep as string (for booleans/text)
+        try:
+            converted_value = float(final_value)
+        except (ValueError, TypeError):
+            # Keep as-is for boolean strings like "true"/"false" or text values
+            converted_value = final_value
+        
         # Store decision in memory
         decisions_store[tender_id][dimension] = {
-            'offered_value': Decimal(str(final_value)),
+            'offered_value': converted_value,
             'justification': user_notes,
+            'requirement_value': requirement_value,  # Store extracted requirement for new fields
             'saved_at': datetime.now().isoformat()
         }
         
-        print(f"✓ Decision stored in memory - Tender {tender_id}, {dimension}: {final_value}")
+        print(f"✓ Decision stored in memory - Tender {tender_id}, {dimension}: {converted_value}")
         
         # Redirect back to tender page with success message
         return RedirectResponse(
@@ -877,6 +905,38 @@ Extract ALL requirements. Do not miss any fields."""
             print(f"  {field['serial_number']}. {status_emoji} [{field['value_type']}] {field['dimension_name']}: {field['extracted_value']} (Page {field['page_number']})")
         print("=" * 80)
         
+        # Store extracted requirement values in decisions_store for later reference
+        # This allows newly extracted fields to show actual requirements in PDFs
+        if tender_id not in decisions_store:
+            decisions_store[tender_id] = {}
+        
+        for field in extracted_fields:
+            dim_key = field['dimension_key'] if field['dimension_key'] else field['dimension_name'].lower().replace(' ', '_')
+            
+            # Only store requirement_value, don't overwrite existing decisions
+            if dim_key not in decisions_store[tender_id]:
+                # Initialize new entry for extracted field
+                decisions_store[tender_id][dim_key] = {
+                    'requirement_value': str(field['extracted_value']),
+                    'extracted_from': f"Page {field['page_number']}",
+                    'offered_value': None,  # Will be filled when user makes a decision
+                    'justification': '',
+                    'saved_at': datetime.now().isoformat()
+                }
+                print(f"  → Stored extracted requirement: {dim_key} = {field['extracted_value']}")
+            elif 'requirement_value' not in decisions_store[tender_id][dim_key]:
+                # Update existing entry with requirement value if not already set
+                decisions_store[tender_id][dim_key]['requirement_value'] = str(field['extracted_value'])
+                decisions_store[tender_id][dim_key]['extracted_from'] = f"Page {field['page_number']}"
+                print(f"  → Updated requirement: {dim_key} = {field['extracted_value']}")
+                if dim_key not in decisions_store[tender_id]:
+                    decisions_store[tender_id][dim_key] = {}
+                
+                # Store the extracted requirement value
+                decisions_store[tender_id][dim_key]['requirement_value'] = str(field['extracted_value'])
+                decisions_store[tender_id][dim_key]['extracted_from'] = f"Page {field['page_number']}"
+                print(f"  → Stored requirement: {dim_key} = {field['extracted_value']}")
+        
         return {
             "success": True,
             "pdf_name": pdf_file.filename,
@@ -922,6 +982,8 @@ async def export_decisions_pdf(tender_id: int):
         
         # Get decisions from memory store
         decisions = []
+        processed_keys = set()
+        
         if tender_id in decisions_store:
             # Get tender requirements from DB to match with stored decisions
             requirements = fetch_all("""
@@ -939,6 +1001,7 @@ async def export_decisions_pdf(tender_id: int):
             
             for req in requirements:
                 dim_key = req['key']
+                processed_keys.add(dim_key)
                 if dim_key in decisions_store[tender_id]:
                     decision = decisions_store[tender_id][dim_key]
                     decisions.append({
@@ -949,6 +1012,22 @@ async def export_decisions_pdf(tender_id: int):
                         'required_value': req['required_value'],
                         'strictness': req['strictness']
                     })
+            
+            # Add newly extracted fields (not in database requirements)
+            for new_dim_key, decision_data in decisions_store[tender_id].items():
+                if new_dim_key not in processed_keys:
+                    # Only include if a decision has been made (offered_value is set)
+                    if decision_data.get('offered_value') is not None:
+                        # This is a new field extracted from PDF that's not in the DB
+                        req_value = decision_data.get('requirement_value')
+                        decisions.append({
+                            'display_name': new_dim_key.replace('_', ' ').title(),
+                            'unit': 'N/A',
+                            'offered_value': decision_data['offered_value'],
+                            'justification': decision_data.get('justification', ''),
+                            'required_value': req_value,
+                            'strictness': 'NEW_FIELD'
+                        })
         
         if not decisions:
             return JSONResponse(status_code=400, content={"error": "No decisions found"})
@@ -959,33 +1038,52 @@ async def export_decisions_pdf(tender_id: int):
         
         for dec in decisions:
             try:
-                groq_prompt = f"""You are a professional tender response writer. Generate a professional, concise paragraph (3-4 sentences) 
-explaining why we are offering {float(dec['offered_value']):.2f} {dec['unit']} for {dec['display_name']}, 
-when the requirement is {dec['required_value']} {dec['unit']} ({dec['strictness']}).
+                requirement_text = dec['required_value'] if dec['required_value'] else 'NEW FIELD'
+                
+                # Format offered value - handle both numeric and boolean
+                try:
+                    offered_val_str = f"{float(dec['offered_value']):.2f}"
+                except (ValueError, TypeError):
+                    # Boolean or text value - capitalize if it's a string
+                    offered_val_str = str(dec['offered_value'])
+                    if offered_val_str.lower() == 'true':
+                        offered_val_str = 'Yes'
+                    elif offered_val_str.lower() == 'false':
+                        offered_val_str = 'No'
+                    else:
+                        offered_val_str = offered_val_str.title()
+                
+                groq_prompt = f"""You are a senior tender response specialist and contract writer. Generate a formal, authoritative response paragraph (3-4 sentences) for the following tender specification detail.
 
-The user's justification was: {dec['justification']}
+SPECIFICATION: {dec['display_name']}
+TENDER REQUIREMENT: {requirement_text} {dec['unit'].rstrip()}
+OUR COMMITMENT: {offered_val_str} {dec['unit'].rstrip()}
+COMMERCIAL JUSTIFICATION: {dec['justification']}
 
-Write in formal tender language that demonstrates:
-1. Understanding of the requirement
-2. Why our offer is competitive and compliant
-3. Value proposition for the client
+Generate formal contractual language that:
+1. Demonstrates comprehensive understanding of the specification and its strategic implications
+2. Articulates our technical/commercial positioning relative to the stated requirement
+3. Establishes value proposition through capability, compliance, and operational excellence
+4. Uses industry-standard terminology appropriate to the domain context
 
-Keep it professional, concise, and suitable for a formal tender document."""
+The response must be suitable for inclusion in a formal binding tender submission document. Employ technical precision, professional acumen, and contractual authority. Avoid generic language or overly simplified explanations.
+
+Format as a single cohesive paragraph without headers or bullet points."""
 
                 groq_response = groq_client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are a professional tender response writer. Generate formal, professional language suitable for tender documents."
+                            "content": "You are a expert tender response writer and contract specialist. Your responsibility is to craft formal, authoritative contractual language for tender submissions. Use professional business terminology, technical precision, and demonstrate strategic commercial positioning. Write with the authority and formality appropriate to binding contractual documents."
                         },
                         {
                             "role": "user",
                             "content": groq_prompt
                         }
                     ],
-                    temperature=0.3,
-                    max_tokens=300
+                    temperature=0.2,
+                    max_tokens=350
                 )
                 
                 professional_text = groq_response.choices[0].message.content.strip()
@@ -1109,19 +1207,68 @@ with our organizational capabilities and policy constraints. Our proposals are b
         
         for dec_detail in decision_details:
             field_name = dec_detail['display_name']
-            requirement = f"{dec_detail['required_value']} {dec_detail['unit']}"
-            offered = f"{float(dec_detail['offered_value']):.2f} {dec_detail['unit']}"
             
-            # Status indicator
-            if float(dec_detail['offered_value']) >= float(dec_detail['required_value']):
-                status_text = "✓ Exceeds"
-                status_color = colors.HexColor('#10b981')
-            elif float(dec_detail['offered_value']) == float(dec_detail['required_value']):
-                status_text = "✓ Meets"
-                status_color = colors.HexColor('#3b82f6')
+            # Handle boolean or string values for offered field
+            offered_raw = dec_detail['offered_value']
+            try:
+                offered_val = float(offered_raw)
+                # Only add unit if it's not "N/A"
+                if dec_detail['unit'] and dec_detail['unit'] != 'N/A':
+                    offered = f"{offered_val:.2f} {dec_detail['unit']}"
+                else:
+                    offered = f"{offered_val:.2f}"
+                is_numeric = True
+            except (ValueError, TypeError):
+                # Boolean or text value - format appropriately
+                if str(offered_raw).lower() == 'true':
+                    offered_display = 'Yes'
+                elif str(offered_raw).lower() == 'false':
+                    offered_display = 'No'
+                else:
+                    offered_display = str(offered_raw)
+                
+                # Only add unit if it's not "N/A"
+                if dec_detail['unit'] and dec_detail['unit'] != 'N/A':
+                    offered = f"{offered_display} {dec_detail['unit']}"
+                else:
+                    offered = offered_display
+                is_numeric = False
+            
+            # Handle new fields without requirements
+            if dec_detail['required_value'] is None:
+                requirement = "SPECIFICATION"
+                status_text = "✓ Assessed"
+                status_color = colors.HexColor('#8b5cf6')
+            elif dec_detail['strictness'] == 'NEW_FIELD':
+                # New field with extracted requirement value - display as tender specification
+                requirement = str(dec_detail['required_value'])
+                status_text = "✓ Assessed"
+                status_color = colors.HexColor('#8b5cf6')
             else:
-                status_text = "⚠ Below"
-                status_color = colors.HexColor('#f59e0b')
+                try:
+                    required_val = float(dec_detail['required_value'])
+                    requirement = f"{required_val} {dec_detail['unit']}".strip()
+                    
+                    # Status indicator (only for numeric)
+                    if is_numeric:
+                        if offered_val >= required_val:
+                            status_text = "✓ Exceeds"
+                            status_color = colors.HexColor('#10b981')
+                        elif offered_val == required_val:
+                            status_text = "✓ Meets"
+                            status_color = colors.HexColor('#3b82f6')
+                        else:
+                            status_text = "⚠ Below"
+                            status_color = colors.HexColor('#f59e0b')
+                    else:
+                        # Non-numeric field
+                        status_text = "✓ Present"
+                        status_color = colors.HexColor('#10b981')
+                except (ValueError, TypeError):
+                    # Non-numeric requirement
+                    requirement = f"{dec_detail['required_value']} {dec_detail['unit']}".strip()
+                    status_text = "✓ Present"
+                    status_color = colors.HexColor('#10b981')
             
             decision_data.append([field_name, requirement, offered, status_text])
         
@@ -1161,10 +1308,36 @@ with our organizational capabilities and policy constraints. Our proposals are b
             )))
             
             # Requirement details in a small box
-            req_box_data = [
-                [f"Requirement: {dec_detail['required_value']} {dec_detail['unit']} ({dec_detail['strictness']})", 
-                 f"Our Offer: {float(dec_detail['offered_value']):.2f} {dec_detail['unit']}"]
-            ]
+            # Format offered value
+            try:
+                offered_display = f"{float(dec_detail['offered_value']):.2f}"
+            except (ValueError, TypeError):
+                offered_display = str(dec_detail['offered_value'])
+                if offered_display.lower() == 'true':
+                    offered_display = 'Yes'
+                elif offered_display.lower() == 'false':
+                    offered_display = 'No'
+            
+            # Build unit display - only show if not "N/A"
+            unit_display = dec_detail['unit'] if dec_detail['unit'] != 'N/A' else ''
+            offered_field = f"{offered_display} {unit_display}".strip()
+            
+            if dec_detail['required_value'] is None:
+                req_box_data = [
+                    [f"Tender Specification: As Tendered", 
+                     f"Our Commitment: {offered_field}"]
+                ]
+            elif dec_detail['strictness'] == 'NEW_FIELD' and dec_detail['required_value']:
+                # New field with extracted requirement - show as specification
+                req_box_data = [
+                    [f"Tender Specification: {dec_detail['required_value']}", 
+                     f"Our Commitment: {offered_field}"]
+                ]
+            else:
+                req_box_data = [
+                    [f"Tender Specification: {dec_detail['required_value']} {dec_detail['unit']} ({dec_detail['strictness']})", 
+                     f"Our Commitment: {offered_field}"]
+                ]
             req_box = Table(req_box_data, colWidths=[3*inch, 3*inch])
             req_box.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f3f4f6')),
