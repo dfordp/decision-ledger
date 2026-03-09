@@ -1,6 +1,7 @@
 """
 FastAPI application for DecisionLedger POC.
 Server-rendered HTML interface for tender evaluation.
+All decisions stored in memory (no database persistence for POC).
 """
 
 from datetime import datetime
@@ -16,7 +17,6 @@ from fastapi.responses import StreamingResponse
 
 from app.database import fetch_all, fetch_one
 from app.reasoning import reason_about_requirement
-from app.persistence import save_decision
 from app.models import DecisionUpdate, ReasoningResult
 
 
@@ -26,6 +26,10 @@ app = FastAPI(
     description="AI-powered tender evaluation with historical memory",
     version="1.0.0"
 )
+
+# In-memory store for decisions (POC - no database persistence)
+# Structure: {tender_id: {dimension_key: {offered_value, justification, saved_at}}}
+decisions_store = {}
 
 # Mount static files only if directory exists
 static_dir = "app/static"
@@ -141,6 +145,7 @@ async def tender_page(
     """
     Tender evaluation page - Main interface for evaluating a tender
     Shows one dimension at a time with reasoning and evidence
+    Handles both database dimensions and new extracted dimensions (memory store)
     """
     # Fetch tender
     tender = fetch_one(
@@ -151,7 +156,7 @@ async def tender_page(
     if not tender:
         raise HTTPException(status_code=404, detail="Tender not found")
     
-    # Get all dimensions for this tender
+    # Get all dimensions for this tender FROM DATABASE
     all_dimensions = fetch_all("""
         SELECT DISTINCT
             ed.key,
@@ -163,24 +168,35 @@ async def tender_page(
         ORDER BY ed.display_name
     """, (tender_id,))
     
-    # Get reasoning for current dimension
+    # Add any new dimensions from memory store (extracted by Groq)
+    all_dim_keys = {d['key'] for d in all_dimensions}
+    if tender_id in decisions_store:
+        for mem_dimension in decisions_store[tender_id].keys():
+            if mem_dimension not in all_dim_keys:
+                # New dimension from extraction - add to list
+                all_dimensions.append({
+                    'key': mem_dimension,
+                    'display_name': mem_dimension.replace('_', ' ').title(),
+                    'unit': 'N/A'
+                })
+    
+    # Get reasoning for current dimension (with graceful fallback for new dimensions)
+    reasoning_result = None
     try:
         reasoning_result = reason_about_requirement(tender_id, dimension)
     except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error reasoning about requirement: {str(e)}"
-        )
+        print(f"⚠️ Could not get reasoning for {dimension}: {e}")
+        # Continue without reasoning for new/extracted dimensions
+        reasoning_result = None
     
-    # Check if user has already made a decision for this dimension
-    existing_decision = fetch_one("""
-        SELECT pd.offered_value, pd.justification
-        FROM proposal_decisions pd
-        JOIN proposals p ON pd.proposal_id = p.id
-        JOIN tenders t ON p.tender_name = t.name
-        JOIN evaluation_dimension ed ON pd.dimension_id = ed.id
-        WHERE t.id = %s AND ed.key = %s
-    """, (tender_id, dimension))
+    # Check if user has already made a decision for this dimension (from memory)
+    existing_decision = None
+    if tender_id in decisions_store and dimension in decisions_store[tender_id]:
+        decision = decisions_store[tender_id][dimension]
+        existing_decision = {
+            'offered_value': decision['offered_value'],
+            'justification': decision['justification']
+        }
     
     return templates.TemplateResponse("tender.html", {
         "request": request,
@@ -265,7 +281,6 @@ async def tender_canvas(request: Request, tender_id: int):
     })
 
 
-
 @app.post("/api/tender/{tender_id}/generate-proposal")
 async def generate_proposal(tender_id: int):
     """
@@ -277,40 +292,35 @@ async def generate_proposal(tender_id: int):
     if not tender:
         raise HTTPException(status_code=404, detail="Tender not found")
     
-    # First, ensure a proposal exists for this tender
-    proposal = fetch_one("""
-        SELECT id FROM proposals 
-        WHERE tender_name = %s
-        ORDER BY submitted_at DESC
-        LIMIT 1
-    """, (tender['name'],))
-    
-    if not proposal:
-        # Create a new proposal if none exists
-        from app.persistence import create_or_get_proposal
-        proposal_id = create_or_get_proposal(
-            tender_name=tender['name'],
-            domain=tender['domain'],
-            vendor_id=1  # Default vendor
-        )
-        proposal = {'id': proposal_id}
-    
-    # Get all decisions for this proposal
-    decisions = fetch_all("""
-        SELECT 
-            ed.display_name,
-            ed.unit,
-            pd.offered_value,
-            pd.justification,
-            tr.required_value,
-            tr.strictness
-        FROM proposal_decisions pd
-        JOIN evaluation_dimension ed ON pd.dimension_id = ed.id
-        JOIN tender_requirements tr ON tr.dimension_id = ed.id
-        WHERE pd.proposal_id = %s
-        AND tr.tender_id = %s
-        ORDER BY ed.display_name
-    """, (proposal['id'], tender_id))
+    # Get all decisions from memory store
+    decisions = []
+    if tender_id in decisions_store:
+        # Get tender requirements from DB to match with stored decisions
+        requirements = fetch_all("""
+            SELECT 
+                ed.display_name,
+                ed.unit,
+                tr.required_value,
+                tr.strictness,
+                ed.key
+            FROM tender_requirements tr
+            JOIN evaluation_dimension ed ON tr.dimension_id = ed.id
+            WHERE tr.tender_id = %s
+            ORDER BY ed.display_name
+        """, (tender_id,))
+        
+        for req in requirements:
+            dim_key = req['key']
+            if dim_key in decisions_store[tender_id]:
+                decision = decisions_store[tender_id][dim_key]
+                decisions.append({
+                    'display_name': req['display_name'],
+                    'unit': req['unit'],
+                    'offered_value': decision['offered_value'],
+                    'justification': decision['justification'],
+                    'required_value': req['required_value'],
+                    'strictness': req['strictness']
+                })
     
     if not decisions:
         raise HTTPException(
@@ -339,7 +349,7 @@ COMMERCIAL TERMS
 {decision['display_name']}
 {'-' * 50}
 Requirement: {decision['required_value']} {decision['unit']} ({decision['strictness']})
-Our Offer:   {decision['offered_value']} {decision['unit']}
+Our Offer:   {float(decision['offered_value']):.2f} {decision['unit']}
 Rationale:   {decision['justification']}
 
 """
@@ -584,16 +594,22 @@ async def api_update_decision(
     user_notes: str = Form(default="")
 ):
     """
-    API endpoint to save user's decision
-    Persists to database with embeddings for future similarity search
+    API endpoint to save user's decision IN MEMORY (POC mode)
+    Data is not persisted to database
     """
     try:
-        decision_id = save_decision(
-            tender_id=tender_id,
-            dimension_key=dimension,
-            final_value=Decimal(str(final_value)),
-            user_notes=user_notes
-        )
+        # Initialize tender store if not exists
+        if tender_id not in decisions_store:
+            decisions_store[tender_id] = {}
+        
+        # Store decision in memory
+        decisions_store[tender_id][dimension] = {
+            'offered_value': Decimal(str(final_value)),
+            'justification': user_notes,
+            'saved_at': datetime.now().isoformat()
+        }
+        
+        print(f"✓ Decision stored in memory - Tender {tender_id}, {dimension}: {final_value}")
         
         # Redirect back to tender page with success message
         return RedirectResponse(
@@ -612,7 +628,9 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "service": "DecisionLedger API"
+        "service": "DecisionLedger API",
+        "mode": "POC",
+        "storage": "in-memory"
     }
 
 
@@ -882,41 +900,119 @@ Extract ALL requirements. Do not miss any fields."""
 @app.post("/api/tender/{tender_id}/export-decisions-pdf")
 async def export_decisions_pdf(tender_id: int):
     """
-    Generate PDF export of all decisions made for this tender
+    Generate professional PDF export of all decisions made for this tender
+    Reads from in-memory store (POC mode)
+    Uses Groq to generate professional tender language
     """
     try:
         from reportlab.lib.pagesizes import letter, A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import inch
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, HRFlowable
         from reportlab.lib import colors
-        from reportlab.lib.enums import TA_CENTER, TA_LEFT
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
         import io
         from datetime import datetime
+        import json
         
-        # Get tender info - FIX: Use %s instead of ?
-        tender = fetch_one("SELECT * FROM tender WHERE id = %s", (tender_id,))
+        # Get tender info
+        tender = fetch_one("SELECT * FROM tenders WHERE id = %s", (tender_id,))
         if not tender:
             return JSONResponse(status_code=404, content={"error": "Tender not found"})
         
-        # Get all decisions for this tender - FIX: Use %s instead of ?
-        decisions = fetch_all("""
-            SELECT 
-                d.*,
-                ed.display_name,
-                ed.unit,
-                vp.min_value as policy_min,
-                vp.max_value as policy_max
-            FROM decision d
-            JOIN evaluation_dimension ed ON d.dimension_id = ed.id
-            LEFT JOIN vendor_policy vp ON ed.id = vp.dimension_id
-            WHERE d.tender_id = %s
-            ORDER BY ed.display_name
-        """, (tender_id,))
+        # Get decisions from memory store
+        decisions = []
+        if tender_id in decisions_store:
+            # Get tender requirements from DB to match with stored decisions
+            requirements = fetch_all("""
+                SELECT 
+                    ed.display_name,
+                    ed.unit,
+                    tr.required_value,
+                    tr.strictness,
+                    ed.key
+                FROM tender_requirements tr
+                JOIN evaluation_dimension ed ON tr.dimension_id = ed.id
+                WHERE tr.tender_id = %s
+                ORDER BY ed.display_name
+            """, (tender_id,))
+            
+            for req in requirements:
+                dim_key = req['key']
+                if dim_key in decisions_store[tender_id]:
+                    decision = decisions_store[tender_id][dim_key]
+                    decisions.append({
+                        'display_name': req['display_name'],
+                        'unit': req['unit'],
+                        'offered_value': decision['offered_value'],
+                        'justification': decision['justification'],
+                        'required_value': req['required_value'],
+                        'strictness': req['strictness']
+                    })
+        
+        if not decisions:
+            return JSONResponse(status_code=400, content={"error": "No decisions found"})
+        
+        # Generate professional language for each decision using Groq
+        print("\n📝 Generating professional tender language with Groq...")
+        decision_details = []
+        
+        for dec in decisions:
+            try:
+                groq_prompt = f"""You are a professional tender response writer. Generate a professional, concise paragraph (3-4 sentences) 
+explaining why we are offering {float(dec['offered_value']):.2f} {dec['unit']} for {dec['display_name']}, 
+when the requirement is {dec['required_value']} {dec['unit']} ({dec['strictness']}).
+
+The user's justification was: {dec['justification']}
+
+Write in formal tender language that demonstrates:
+1. Understanding of the requirement
+2. Why our offer is competitive and compliant
+3. Value proposition for the client
+
+Keep it professional, concise, and suitable for a formal tender document."""
+
+                groq_response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a professional tender response writer. Generate formal, professional language suitable for tender documents."
+                        },
+                        {
+                            "role": "user",
+                            "content": groq_prompt
+                        }
+                    ],
+                    temperature=0.3,
+                    max_tokens=300
+                )
+                
+                professional_text = groq_response.choices[0].message.content.strip()
+                
+                decision_details.append({
+                    'display_name': dec['display_name'],
+                    'unit': dec['unit'],
+                    'offered_value': dec['offered_value'],
+                    'required_value': dec['required_value'],
+                    'strictness': dec['strictness'],
+                    'professional_text': professional_text
+                })
+                
+            except Exception as e:
+                print(f"⚠️ Error generating language for {dec['display_name']}: {e}")
+                decision_details.append({
+                    'display_name': dec['display_name'],
+                    'unit': dec['unit'],
+                    'offered_value': dec['offered_value'],
+                    'required_value': dec['required_value'],
+                    'strictness': dec['strictness'],
+                    'professional_text': dec['justification']
+                })
         
         # Create PDF in memory
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch)
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.75*inch, bottomMargin=0.75*inch)
         story = []
         styles = getSampleStyleSheet()
         
@@ -924,7 +1020,17 @@ async def export_decisions_pdf(tender_id: int):
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
-            fontSize=24,
+            fontSize=18,
+            textColor=colors.HexColor('#1a3a52'),
+            spaceAfter=6,
+            alignment=TA_CENTER,
+            bold=True
+        )
+        
+        subtitle_style = ParagraphStyle(
+            'SubTitle',
+            parent=styles['Normal'],
+            fontSize=12,
             textColor=colors.HexColor('#667eea'),
             spaceAfter=12,
             alignment=TA_CENTER
@@ -933,81 +1039,225 @@ async def export_decisions_pdf(tender_id: int):
         heading_style = ParagraphStyle(
             'CustomHeading',
             parent=styles['Heading2'],
-            fontSize=16,
-            textColor=colors.HexColor('#333333'),
+            fontSize=13,
+            textColor=colors.HexColor('#1a3a52'),
             spaceAfter=10,
-            spaceBefore=20
+            spaceBefore=12,
+            bold=True,
+            borderPadding=6
         )
         
-        # Title
-        story.append(Paragraph(f"Decision Ledger Report", title_style))
-        story.append(Paragraph(f"{tender['name']}", styles['Heading2']))
+        body_style = ParagraphStyle(
+            'CustomBody',
+            parent=styles['Normal'],
+            fontSize=10,
+            alignment=TA_JUSTIFY,
+            spaceAfter=10,
+            leading=12
+        )
+        
+        # ====== TITLE PAGE ======
+        story.append(Spacer(1, 0.3*inch))
+        story.append(Paragraph("TENDER RESPONSE PROPOSAL", title_style))
+        story.append(Paragraph(tender['name'], subtitle_style))
+        story.append(Spacer(1, 0.2*inch))
+        story.append(HRFlowable(width=6*inch, thickness=2, lineCap='round', color=colors.HexColor('#667eea')))
         story.append(Spacer(1, 0.3*inch))
         
         # Metadata table
         metadata = [
-            ['Tender Information', ''],
+            ['Tender Name', tender['name']],
             ['Domain', tender['domain']],
+            ['Year', str(tender['year'])],
             ['Status', tender['status']],
-            ['Generated', datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
-            ['Total Decisions', str(len(decisions))]
+            ['Generated Date', datetime.now().strftime('%B %d, %Y')],
+            ['Generated Time', datetime.now().strftime('%H:%M:%S UTC')]
         ]
         
-        meta_table = Table(metadata, colWidths=[2.5*inch, 4*inch])
+        meta_table = Table(metadata, colWidths=[2*inch, 4*inch])
         meta_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0f4f8')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#1a3a52')),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 12),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey)
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#d0d8e0')),
+            ('ROWBACKGROUNDS', (0, 0), (-1, -1), [colors.white, colors.HexColor('#f9fafb')])
         ]))
         
         story.append(meta_table)
         story.append(Spacer(1, 0.4*inch))
         
-        # Decisions heading
-        story.append(Paragraph("Decisions Summary", heading_style))
+        # Executive Summary
+        story.append(Paragraph("EXECUTIVE SUMMARY", heading_style))
+        exec_summary = f"""This proposal represents our comprehensive response to the {tender['name']} tender 
+requirements. We have carefully evaluated each specification and provided offers that balance commercial considerations 
+with our organizational capabilities and policy constraints. Our proposals are based on extensive experience in the 
+{tender['domain']} sector and our commitment to delivering exceptional value to our clients."""
+        story.append(Paragraph(exec_summary, body_style))
+        story.append(Spacer(1, 0.2*inch))
         
-        # Decisions table
-        decision_data = [['Field', 'Policy Range', 'Final Decision', 'Status']]
+        # Commercial Terms Section
+        story.append(PageBreak())
+        story.append(Paragraph("COMMERCIAL TERMS & CONDITIONS", heading_style))
+        story.append(Spacer(1, 0.1*inch))
         
-        for dec in decisions:
-            field_name = dec['display_name']
-            policy_range = f"{dec['policy_min']}-{dec['policy_max']} {dec['unit']}" if dec['policy_min'] and dec['policy_max'] else "No policy"
-            final_value = f"{dec['final_value']} {dec['unit']}" if dec['final_value'] else "Not decided"
+        # Detailed decisions table
+        decision_data = [['Field', 'Requirement', 'Our Offer', 'Status']]
+        
+        for dec_detail in decision_details:
+            field_name = dec_detail['display_name']
+            requirement = f"{dec_detail['required_value']} {dec_detail['unit']}"
+            offered = f"{float(dec_detail['offered_value']):.2f} {dec_detail['unit']}"
             
-            # Determine status
-            if dec['final_value']:
-                if dec['policy_min'] and dec['policy_max']:
-                    val = float(dec['final_value'])
-                    if dec['policy_min'] <= val <= dec['policy_max']:
-                        status_text = "✓ In Policy"
-                    else:
-                        status_text = "⚠ Out of Policy"
-                else:
-                    status_text = "✓ Decided"
+            # Status indicator
+            if float(dec_detail['offered_value']) >= float(dec_detail['required_value']):
+                status_text = "✓ Exceeds"
+                status_color = colors.HexColor('#10b981')
+            elif float(dec_detail['offered_value']) == float(dec_detail['required_value']):
+                status_text = "✓ Meets"
+                status_color = colors.HexColor('#3b82f6')
             else:
-                status_text = "⏳ Pending"
+                status_text = "⚠ Below"
+                status_color = colors.HexColor('#f59e0b')
             
-            decision_data.append([field_name, policy_range, final_value, status_text])
+            decision_data.append([field_name, requirement, offered, status_text])
         
-        decisions_table = Table(decision_data, colWidths=[2*inch, 1.8*inch, 1.5*inch, 1.2*inch])
-        decisions_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
+        decision_summary_table = Table(decision_data, colWidths=[1.8*inch, 1.6*inch, 1.6*inch, 1.3*inch])
+        decision_summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a3a52')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 11),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
             ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#d0d8e0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')])
         ]))
         
-        story.append(decisions_table)
+        story.append(decision_summary_table)
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Detailed justifications
+        story.append(Paragraph("DETAILED JUSTIFICATION BY REQUIREMENT", heading_style))
+        story.append(Spacer(1, 0.1*inch))
+        
+        for idx, dec_detail in enumerate(decision_details, 1):
+            # Requirement heading
+            req_heading = f"{idx}. {dec_detail['display_name'].upper()}"
+            story.append(Paragraph(req_heading, ParagraphStyle(
+                'ReqHeading',
+                parent=styles['Normal'],
+                fontSize=11,
+                textColor=colors.HexColor('#667eea'),
+                spaceAfter=6,
+                spaceBefore=8,
+                bold=True
+            )))
+            
+            # Requirement details in a small box
+            req_box_data = [
+                [f"Requirement: {dec_detail['required_value']} {dec_detail['unit']} ({dec_detail['strictness']})", 
+                 f"Our Offer: {float(dec_detail['offered_value']):.2f} {dec_detail['unit']}"]
+            ]
+            req_box = Table(req_box_data, colWidths=[3*inch, 3*inch])
+            req_box.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f3f4f6')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#1a3a52')),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('PADDING', (0, 0), (-1, -1), 8),
+                ('BORDERS', (0, 0), (-1, -1), 1, colors.HexColor('#d0d8e0')),
+            ]))
+            story.append(req_box)
+            story.append(Spacer(1, 0.1*inch))
+            
+            # Professional justification
+            story.append(Paragraph(dec_detail['professional_text'], body_style))
+            story.append(Spacer(1, 0.15*inch))
+        
+        # Add page break before declarations
+        story.append(PageBreak())
+        
+        # Terms & Conditions
+        story.append(Paragraph("TERMS & CONDITIONS", heading_style))
+        terms_text = f"""All offers detailed in this proposal are binding commitments by our organization. We confirm that:
+        
+        • All specifications and terms stated above represent our final offer for the {tender['name']} tender
+        • We have validated all offers against our organizational policies and capacity constraints
+        • All pricing and commercial terms are firm for a period of 90 days from the date of submission
+        • We commit to meeting or exceeding all mandatory requirements as specified in the tender documentation
+        • This proposal is submitted in compliance with all applicable regulations and industry standards"""
+        
+        story.append(Paragraph(terms_text, body_style))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Declaration Section
+        story.append(Paragraph("DECLARATION AND AUTHORIZATION", heading_style))
+        declaration_text = f"""We hereby declare that:
+
+        1. This proposal is authentic and complete in all material respects
+        2. All information provided is accurate and has been verified by appropriate personnel
+        3. We accept full responsibility for the performance of all terms and conditions outlined herein
+        4. We have the authority and organizational capacity to fulfill this proposal in its entirety
+        5. There are no conflicts of interest or undisclosed relationships that would compromise our ability to perform
+        
+        By submission of this proposal, our organization commits to the specifications and commercial terms outlined above 
+for the {tender['name']} tender, scheduled for {tender['year']}. This proposal is submitted as our final and binding offer.
+        
+        Prepared by: DecisionLedger AI System
+        Date: {datetime.now().strftime('%B %d, %Y')}
+        Time: {datetime.now().strftime('%H:%M:%S')} UTC"""
+        
+        story.append(Paragraph(declaration_text, body_style))
+        story.append(Spacer(1, 0.4*inch))
+        
+        # Signature Section
+        story.append(HRFlowable(width=6*inch, thickness=1, color=colors.HexColor('#d0d8e0')))
+        story.append(Spacer(1, 0.2*inch))
+        
+        sig_data = [
+            ['AUTHORIZED SIGNATORY', '', 'TECHNICAL REVIEWER'],
+            ['', '', ''],
+            ['_' * 25, '', '_' * 25],
+            ['Name (Print)', '', 'Name (Print)'],
+            ['', '', ''],
+            ['_' * 25, '', '_' * 25],
+            ['Signature', '', 'Signature'],
+            ['', '', ''],
+            ['_' * 25, '', '_' * 25],
+            ['Date', '', 'Date']
+        ]
+        
+        sig_table = Table(sig_data, colWidths=[2*inch, 0.5*inch, 2*inch])
+        sig_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        
+        story.append(sig_table)
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Footer
+        story.append(HRFlowable(width=6*inch, thickness=1, color=colors.HexColor('#d0d8e0')))
+        footer_text = f"DecisionLedger Tender Response System | Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')} | Document Reference: {tender_id}-{datetime.now().strftime('%Y%m%d')}"
+        story.append(Paragraph(footer_text, ParagraphStyle(
+            'Footer',
+            parent=styles['Normal'],
+            fontSize=8,
+            textColor=colors.HexColor('#9ca3af'),
+            alignment=TA_CENTER,
+            spaceAfter=6
+        )))
         
         # Build PDF
         doc.build(story)
@@ -1019,7 +1269,7 @@ async def export_decisions_pdf(tender_id: int):
             buffer,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f"attachment; filename=DecisionLedger_{tender['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
+                "Content-Disposition": f"attachment; filename=TenderResponse_{tender['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
             }
         )
         
@@ -1035,41 +1285,59 @@ async def export_decisions_pdf(tender_id: int):
 @app.get("/api/field/{dimension_key}/options")
 async def get_field_options_from_history(
     dimension_key: str,
-    extracted_value: float = Query(...),
+    extracted_value: str = Query(...),
     tender_domain: str = Query(...)
 ):
     """
     Get decision options for a field based on historical data
     Now handles new fields that don't exist in database
+    Accepts string values for non-numeric extracted data
     """
     try:
+        # Try to convert extracted_value to float for numeric fields
+        try:
+            extracted_val_float = float(extracted_value)
+        except (ValueError, TypeError):
+            extracted_val_float = None
+        
         # First, check if dimension exists in database
-        dimension = fetch_one("""
-            SELECT
-                ed.id,
-                ed.key,
-                ed.display_name,
-                ed.unit,
-                vp.min_value as policy_min,
-                vp.max_value as policy_max,
-                vp.flexibility,
-                vp.notes as policy_notes
-            FROM evaluation_dimension ed
-            LEFT JOIN vendor_policy vp ON ed.id = vp.dimension_id
-                AND (vp.domain = %s OR vp.domain = 'GLOBAL')
-            WHERE ed.key = %s
-            ORDER BY
-                CASE
-                    WHEN vp.domain = %s THEN 0
-                    WHEN vp.domain = 'GLOBAL' THEN 1
-                    ELSE 2
-                END
-            LIMIT 1
-        """, (tender_domain, dimension_key, tender_domain))
+        try:
+            dimension = fetch_one("""
+                SELECT
+                    ed.id,
+                    ed.key,
+                    ed.display_name,
+                    ed.unit,
+                    vp.min_value as policy_min,
+                    vp.max_value as policy_max,
+                    vp.flexibility,
+                    vp.notes as policy_notes
+                FROM evaluation_dimension ed
+                LEFT JOIN vendor_policy vp ON ed.id = vp.dimension_id
+                    AND (vp.domain = %s OR vp.domain = 'GLOBAL')
+                WHERE ed.key = %s
+                ORDER BY
+                    CASE
+                        WHEN vp.domain = %s THEN 0
+                        WHEN vp.domain = 'GLOBAL' THEN 1
+                        ELSE 2
+                    END
+                LIMIT 1
+            """, (tender_domain, dimension_key, tender_domain))
+        except Exception as db_error:
+            # Handle invalid enum values gracefully
+            print(f"⚠️ Dimension '{dimension_key}' caused error: {db_error}")
+            return {
+                "dimension_key": dimension_key,
+                "display_name": dimension_key.replace('_', ' ').title(),
+                "extracted_value": extracted_value,
+                "options": [],
+                "message": f"This is a new field not yet in our system: {dimension_key}"
+            }
         
         # If dimension doesn't exist, return empty options
         if not dimension:
-            print(f"⚠️  Dimension '{dimension_key}' not found in database - new field detected")
+            print(f"⚠️ Dimension '{dimension_key}' not found in database - new field detected")
             return {
                 "dimension_key": dimension_key,
                 "display_name": dimension_key.replace('_', ' ').title(),
@@ -1097,60 +1365,62 @@ async def get_field_options_from_history(
         
         options = []
         
-        # Option 1: Use extracted value (if within policy range)
-        if dimension['policy_min'] and dimension['policy_max']:
-            policy_min_val = float(dimension['policy_min'])
-            policy_max_val = float(dimension['policy_max'])
-            
-            if policy_min_val <= extracted_value <= policy_max_val:
-                options.append({
-                    "title": f"Use Extracted Value",
-                    "value": extracted_value,
-                    "description": f"{extracted_value} {dimension['unit']} (from tender document)",
-                    "rationale": "✅ Within policy range - recommended"
-                })
+        # Only process numeric values for options
+        if extracted_val_float is not None:
+            # Option 1: Use extracted value (if within policy range)
+            if dimension['policy_min'] and dimension['policy_max']:
+                policy_min_val = float(dimension['policy_min'])
+                policy_max_val = float(dimension['policy_max'])
+                
+                if policy_min_val <= extracted_val_float <= policy_max_val:
+                    options.append({
+                        "title": f"Use Extracted Value",
+                        "value": extracted_val_float,
+                        "description": f"{extracted_val_float} {dimension['unit']} (from tender document)",
+                        "rationale": "✅ Within policy range - recommended"
+                    })
+                else:
+                    options.append({
+                        "title": f"Use Extracted Value (Out of Policy)",
+                        "value": extracted_val_float,
+                        "description": f"{extracted_val_float} {dimension['unit']} (from tender document)",
+                        "rationale": f"⚠️ Outside policy range ({policy_min_val}-{policy_max_val} {dimension['unit']})"
+                    })
             else:
                 options.append({
-                    "title": f"Use Extracted Value (Out of Policy)",
-                    "value": extracted_value,
-                    "description": f"{extracted_value} {dimension['unit']} (from tender document)",
-                    "rationale": f"⚠️ Outside policy range ({policy_min_val}-{policy_max_val} {dimension['unit']})"
+                    "title": f"Use Extracted Value",
+                    "value": extracted_val_float,
+                    "description": f"{extracted_val_float} {dimension['unit']} (from tender document)",
+                    "rationale": "From tender requirements"
                 })
-        else:
-            options.append({
-                "title": f"Use Extracted Value",
-                "value": extracted_value,
-                "description": f"{extracted_value} {dimension['unit']} (from tender document)",
-                "rationale": "From tender requirements"
-            })
-        
-        # Option 2: Use policy minimum (if exists)
-        if dimension['policy_min']:
-            options.append({
-                "title": f"Policy Minimum",
-                "value": float(dimension['policy_min']),
-                "description": f"{dimension['policy_min']} {dimension['unit']} (organization policy)",
-                "rationale": f"Meets minimum requirements with {dimension['flexibility'] or 'standard'} flexibility"
-            })
-        
-        # Option 3: Historical average
-        if history:
-            avg_value = sum(float(h['final_value']) for h in history) / len(history)
-            options.append({
-                "title": f"Historical Average",
-                "value": round(avg_value, 2),
-                "description": f"{round(avg_value, 2)} {dimension['unit']} (based on {len(history)} past tenders)",
-                "rationale": f"Average from recent {tender_domain} projects"
-            })
             
-            # Option 4: Most recent decision
-            if history[0]['final_value']:
+            # Option 2: Use policy minimum (if exists)
+            if dimension['policy_min']:
                 options.append({
-                    "title": f"Most Recent Decision",
-                    "value": float(history[0]['final_value']),
-                    "description": f"{history[0]['final_value']} {dimension['unit']} (from {history[0]['tender_name']}, {int(history[0]['year'])})",
-                    "rationale": f"Used in latest similar tender"
+                    "title": f"Policy Minimum",
+                    "value": float(dimension['policy_min']),
+                    "description": f"{dimension['policy_min']} {dimension['unit']} (organization policy)",
+                    "rationale": f"Meets minimum requirements with {dimension['flexibility'] or 'standard'} flexibility"
                 })
+            
+            # Option 3: Historical average
+            if history:
+                avg_value = sum(float(h['final_value']) for h in history) / len(history)
+                options.append({
+                    "title": f"Historical Average",
+                    "value": round(avg_value, 2),
+                    "description": f"{round(avg_value, 2)} {dimension['unit']} (based on {len(history)} past tenders)",
+                    "rationale": f"Average from recent {tender_domain} projects"
+                })
+                
+                # Option 4: Most recent decision
+                if history[0]['final_value']:
+                    options.append({
+                        "title": f"Most Recent Decision",
+                        "value": float(history[0]['final_value']),
+                        "description": f"{history[0]['final_value']} {dimension['unit']} (from {history[0]['tender_name']}, {int(history[0]['year'])})",
+                        "rationale": f"Used in latest similar tender"
+                    })
         
         return {
             "dimension_key": dimension_key,
@@ -1213,6 +1483,10 @@ async def startup_event():
     print("=" * 60)
     print("DecisionLedger - Starting up...")
     print("=" * 60)
+    print()
+    print("🔧 POC MODE - In-Memory Storage")
+    print("📝 Decisions stored in memory (not persisted)")
+    print("📋 Seeded historical data loaded from database")
     print()
     print("Available routes:")
     print("  → http://localhost:8000/")

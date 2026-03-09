@@ -20,7 +20,7 @@ CREATE TABLE evaluation_dimension (
     id SERIAL PRIMARY KEY,
     key dimension_key UNIQUE NOT NULL,
     display_name VARCHAR(100) NOT NULL,
-    unit VARCHAR(20) NOT NULL
+    unit VARCHAR(20) NOT NULL,
     data_type VARCHAR(16) NOT NULL DEFAULT 'NUMERIC'
 );
 
