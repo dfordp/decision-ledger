@@ -37,6 +37,7 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - easyocr_cache:/root/.EasyOCR 
     networks:
       - decisionledger_network
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -63,6 +64,7 @@ services:
 
 volumes:
   postgres_data:
+  easyocr_cache: 
 
 networks:
   decisionledger_network:
