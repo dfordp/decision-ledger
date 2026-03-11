@@ -18,6 +18,15 @@ from fastapi.responses import StreamingResponse
 from app.database import fetch_all, fetch_one
 from app.reasoning import reason_about_requirement
 from app.models import DecisionUpdate, ReasoningResult
+from app.document_ingestion import (
+    detect_file_type,
+    is_scanned_pdf,
+    extract_with_pypdf,
+    extract_with_ocr,
+    extract_with_excel,
+    normalize_document,
+    chunk_document
+)
 
 
 # Initialize FastAPI app
@@ -678,28 +687,59 @@ async def upload_and_extract_pdf(
     pdf_file: UploadFile = File(...)
 ):
     """
-    Upload PDF → Extract text → Use Groq to intelligently parse requirements
-    Returns all extracted fields with color-coded status, page numbers, and positions
+    Upload PDF (native or scanned) → Extract text → Use Groq to intelligently parse requirements
+    
+    Handles:
+    - Native PDFs with selectable text (PyPDF2)
+    - Scanned PDFs / image-only (Tesseract OCR)
+    
+    Returns all extracted fields with color-coded status, page numbers
     """
     try:
         # Read PDF
         pdf_bytes = await pdf_file.read()
-        pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
         
-        # Extract text WITH page numbers
-        pages_text = []
-        for page_num, page in enumerate(pdf_reader.pages, start=1):
-            page_text = page.extract_text()
-            pages_text.append({
-                'page_number': page_num,
-                'text': page_text
-            })
+        print(f"\n{'='*70}")
+        print(f"📥 PDF UPLOAD: {pdf_file.filename}")
+        print(f"{'='*70}")
         
-        full_text = "\n\n".join([f"[PAGE {p['page_number']}]\n{p['text']}" for p in pages_text])
+        # Step 1: Detect file type and extract accordingly
+        file_type = detect_file_type(pdf_file.filename)
+        print(f"\n🔍 Detecting document type...")
+        print(f"📊 File type: {file_type}")
         
-        print(f"\n=== PDF EXTRACTION WITH GROQ ===")
-        print(f"Pages: {len(pdf_reader.pages)}")
-        print(f"Characters extracted: {len(full_text)}")
+        if file_type == "PDF":
+            if is_scanned_pdf(pdf_bytes):
+                print(f"📋 Strategy: Using OCR (EasyOCR)")
+                pages_text = extract_with_ocr(pdf_bytes)
+            else:
+                print(f"📄 Strategy: Using PyPDF2")
+                pages_text = extract_with_pypdf(pdf_bytes)
+        elif file_type == "Excel":
+            print(f"📊 Strategy: Using openpyxl")
+            pages_text = extract_with_excel(pdf_bytes)
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": f"Unsupported file type: {file_type}. Supported: PDF, Excel"
+                }
+            )
+        
+        if not pages_text:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Could not extract text from PDF. Check file format or install Tesseract OCR."
+                }
+            )
+        
+        # Step 2: Normalize document
+        print(f"\n📝 Normalizing document...")
+        full_text = normalize_document(pages_text)
+        print(f"✅ Total characters extracted: {len(full_text)}")
         
         # Get all existing dimensions from DB
         db_dimensions = fetch_all("""
@@ -795,12 +835,12 @@ Extract ALL requirements. Do not miss any fields."""
                 }
             ],
             temperature=0.1,
-            max_tokens=3000
+            max_tokens=5000
         )
         
         groq_output = groq_response.choices[0].message.content.strip()
         
-        # Clean JSON response
+        # Clean JSON response and extract JSON array
         if groq_output.startswith("```json"):
             groq_output = groq_output[7:]
         if groq_output.startswith("```"):
@@ -811,9 +851,17 @@ Extract ALL requirements. Do not miss any fields."""
         
         print(f"\n📥 Groq response:\n{groq_output[:800]}...")
         
-        # Parse Groq's structured output
+        # Extract JSON array from response (may have text before it)
         import json
-        groq_fields = json.loads(groq_output)
+        json_start = groq_output.find('[')
+        json_end = groq_output.rfind(']')
+        
+        if json_start == -1 or json_end == -1:
+            print("❌ Could not find JSON array in Groq response")
+            return JSONResponse(status_code=500, content={"success": False, "error": "Invalid Groq response format"})
+        
+        json_str = groq_output[json_start:json_end+1]
+        groq_fields = json.loads(json_str)
         
         # Build lookup for existing dimensions
         db_lookup = {}
@@ -940,7 +988,7 @@ Extract ALL requirements. Do not miss any fields."""
         return {
             "success": True,
             "pdf_name": pdf_file.filename,
-            "pages": len(pdf_reader.pages),
+            "pages": len(pages_text),
             "fields_extracted": len(extracted_fields),
             "fields": extracted_fields
         }

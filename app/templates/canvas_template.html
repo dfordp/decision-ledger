@@ -1082,7 +1082,8 @@ function renderInputForValueType(field) {
                        id="manualValueInput" 
                        step="0.01"
                        value="${field.extracted_value}"
-                       placeholder="Enter numeric value">
+                       placeholder="Enter numeric value"
+                       onchange="clearOptionCardSelection()">
                 <button class="save-btn" onclick="saveManualValue()">✓ Save</button>
             </div>
         `;
@@ -1105,7 +1106,7 @@ function renderInputForValueType(field) {
     } else if (valueType === 'ENUM') {
         container.innerHTML = `
             <label>💡 Select Option</label>
-            <select class="enum-select" id="manualValueInput">
+            <select class="enum-select" id="manualValueInput" onchange="clearOptionCardSelection()">
                 <option value="${field.extracted_value}" selected>${field.extracted_value}</option>
             </select>
             <button class="save-btn" style="width: 100%; margin-top: 15px;" onclick="saveManualValue()">✓ Save</button>
@@ -1117,17 +1118,25 @@ function renderInputForValueType(field) {
                 <input type="text" 
                        id="manualValueInput" 
                        value="${field.extracted_value}"
-                       placeholder="Enter text value">
+                       placeholder="Enter text value"
+                       onchange="clearOptionCardSelection()">
                 <button class="save-btn" onclick="saveManualValue()">✓ Save</button>
             </div>
         `;
     }
 }
 
+function clearOptionCardSelection() {
+    document.querySelectorAll('.option-card').forEach(card => {
+        card.classList.remove('selected');
+    });
+}
+
 function selectBoolean(value) {
     document.querySelectorAll('.toggle-option').forEach(opt => opt.classList.remove('selected'));
     event.target.classList.add('selected');
     document.getElementById('manualValueInput').value = value;
+    clearOptionCardSelection();
 }
 
 async function loadOptions(field) {
