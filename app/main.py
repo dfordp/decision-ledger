@@ -6,6 +6,7 @@ All decisions stored in memory (no database persistence for POC).
 
 from datetime import datetime
 import os
+import re
 
 from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -883,6 +884,22 @@ Extract ALL requirements. Do not miss any fields."""
             
             field_key = field_name.lower()
             
+            # Parse numeric values that may contain units (e.g., "30 days", "3 mm")
+            if value_type == "NUMERIC" and isinstance(value, str):
+                match = re.match(r'^([\d.]+)', value.strip())
+                if match:
+                    numeric_value = float(match.group(1))
+                    unit_part = value[len(match.group(1)):].strip()
+                    if unit_part and unit == "N/A":
+                        unit = unit_part
+                    value = numeric_value
+            elif value_type == "NUMERIC":
+                try:
+                    value = float(value)
+                except (ValueError, TypeError):
+                    print(f"⚠️ Could not parse numeric value: {value}")
+                    value = None
+            
             # Check if field exists in DB
             dimension_key = None
             dimension_name = field_name
@@ -901,7 +918,7 @@ Extract ALL requirements. Do not miss any fields."""
                 policy_flexibility = dim['flexibility']
                 
                 # Check if value matches policy (only for numeric)
-                if value_type == "NUMERIC" and policy_min and policy_max:
+                if value_type == "NUMERIC" and value is not None and policy_min and policy_max:
                     numeric_val = float(value)
                     if policy_min <= numeric_val <= policy_max:
                         status = 'green'
