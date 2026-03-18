@@ -1,639 +1,451 @@
 """
-Seed script for DecisionLedger POC.
-Generates realistic historical proposals, decisions, policies, and tenders.
+FMEA Seed Script - Populate database with product systems, experts, and example failure modes.
+Provides realistic sample data for FMEA analysis demonstrations and learning.
+Based on AIAG-VDA FMEA 4.0 standard.
 """
 
 import sys
 import os
 from datetime import datetime, timedelta
-from decimal import Decimal
+import json
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.database import (
-    execute_query, insert_and_return_id, fetch_one_value, fetch_all
+    execute_query, insert_and_return_id, fetch_all
 )
 from app.embeddings import (
-    generate_policy_embedding,
-    generate_proposal_embedding,
-    generate_decision_embedding,
-    generate_requirement_embedding
+    generate_failure_mode_embedding,
+    generate_failure_cause_embedding,
+    generate_mitigation_action_embedding,
+    generate_expert_skills_embedding,
+    generate_system_function_embedding
 )
 
 def clear_existing_data():
-    """Clear all data from tables (for clean re-seeding)"""
-    print("Clearing existing data...")
+    """Clear all FMEA-related data from tables"""
+    print("🗑️ Clearing existing FMEA data...")
     
     tables = [
-        'proposal_decisions',
-        'proposals',
-        'tender_requirements',
-        'tenders',
-        'vendor_policy',
-        'vendors'
+        'post_action_risk_score',
+        'mitigation_action',
+        'fmea_phase_checklist',
+        'fmea_record',
+        'historical_fmea',
+        'risk_score',
+        'current_control',
+        'failure_cause',
+        'failure_mode',
+        'expert_profile',
+        'organizational_standard',
+        'risk_factor',
+        'product_system'
     ]
     
     for table in tables:
-        execute_query(f"DELETE FROM {table}")
+        try:
+            execute_query(f"TRUNCATE TABLE {table} CASCADE")
+        except:
+            execute_query(f"DELETE FROM {table}")
     
-    print("✓ Existing data cleared\n")
+    print("✓ Database cleared\n")
 
-def load_dimensions():
-    """Load all available dimensions from database"""
-    print("Loading evaluation dimensions...")
+def seed_product_systems():
+    """Create realistic product systems across different domains"""
+    print("🏭 Seeding product systems...")
     
-    dimensions = fetch_all("SELECT id, key, display_name, unit FROM evaluation_dimension ORDER BY id")
-    
-    dim_map = {}
-    for dim in dimensions:
-        dim_map[dim['key']] = dim
-        print(f"  Found: {dim['key']} ({dim['display_name']})")
-    
-    print(f"✓ Loaded {len(dim_map)} dimensions\n")
-    return dim_map
-
-def seed_vendor():
-    """Create the single vendor for this POC"""
-    print("Seeding vendor...")
-    
-    vendor_id = insert_and_return_id(
-        "INSERT INTO vendors (name) VALUES (%s)",
-        ("AcmeCorp Industrial Solutions",)
-    )
-    
-    print(f"✓ Created vendor: AcmeCorp Industrial Solutions (ID: {vendor_id})\n")
-    return vendor_id
-
-def seed_vendor_policies(vendor_id: int, dimensions: dict):
-    """Create vendor policies across different domains"""
-    print("Seeding vendor policies...")
-    
-    policies = [
-        # RAIL_HVAC domain
+    systems = [
         {
-            'dimension_key': 'MAINTENANCE_DURATION',
-            'domain': 'RAIL_HVAC',
-            'min_value': 3.0,
-            'max_value': 5.0,
-            'default_value': 4.0,
-            'flexibility': 'negotiable',
-            'notes': 'Our rail HVAC maintenance capacity is optimized for 3-5 year contracts. Can extend to 6 years with advance planning.'
+            'name': 'Brake System',
+            'system_function': 'Prevent vehicle through controlled friction',
+            'domain': 'automotive',
+            'system_level': 'system',
+            'scope': 'Anti-lock braking system (ABS) for passenger vehicles',
+            'description': 'Safety-critical brake system preventing wheel lockup during emergency braking'
         },
         {
-            'dimension_key': 'WARRANTY_YEARS',  # ← FIXED: Changed from WARRANTY_PERIOD
-            'domain': 'RAIL_HVAC',
-            'min_value': 2.0,
-            'max_value': 3.0,
-            'default_value': 2.0,
-            'flexibility': 'fixed',
-            'notes': 'Standard warranty coverage for HVAC systems. Component manufacturers limit our flexibility here.'
+            'name': 'Power Steering System',
+            'system_function': 'Assist driver steering control with hydraulic pressure',
+            'domain': 'automotive',
+            'system_level': 'system',
+            'scope': 'Hydraulic power steering for light vehicles',
+            'description': 'Hydraulic assist steering system with pressure regulation'
         },
         {
-            'dimension_key': 'PAYMENT_TERMS',
-            'domain': 'RAIL_HVAC',
-            'min_value': 30.0,
-            'max_value': 90.0,
-            'default_value': 60.0,
-            'flexibility': 'flexible',
-            'notes': 'Cash flow allows flexibility on payment terms for rail projects.'
+            'name': 'Fuel Injection System',
+            'system_function': 'Deliver precise fuel quantity to engine cylinders',
+            'domain': 'automotive',
+            'system_level': 'subsystem',
+            'scope': 'Direct injection system for gasoline engines',
+            'description': 'Electronic fuel injector control and delivery system'
         },
         {
-            'dimension_key': 'LOCAL_CONTENT_PERCENT',
-            'domain': 'RAIL_HVAC',
-            'min_value': 35.0,
-            'max_value': 55.0,
-            'default_value': 45.0,
-            'flexibility': 'negotiable',
-            'notes': 'Local supply chain well-established for rail HVAC. Can push to 60% with advance notice.'
-        },
-        
-        # POWER_GRID domain
-        {
-            'dimension_key': 'MAINTENANCE_DURATION',
-            'domain': 'POWER_GRID',
-            'min_value': 2.0,
-            'max_value': 4.0,
-            'default_value': 3.0,
-            'flexibility': 'fixed',
-            'notes': 'Power grid maintenance requires specialized team. Limited capacity beyond 4 years.'
+            'name': 'Pacemaker Electrode Array',
+            'system_function': 'Deliver electrical stimulation to cardiac tissue',
+            'domain': 'medical',
+            'system_level': 'component',
+            'scope': 'Cardiac rhythm management electrode system',
+            'description': 'Implantable electrode arrays for pacemaker lead function'
         },
         {
-            'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-            'domain': 'POWER_GRID',
-            'min_value': 1.0,
-            'max_value': 2.0,
-            'default_value': 1.0,
-            'flexibility': 'fixed',
-            'notes': 'Power infrastructure has higher risk. Conservative warranty policy.'
+            'name': 'Infusion Pump Control',
+            'system_function': 'Deliver medication at controlled rate and pressure',
+            'domain': 'medical',
+            'system_level': 'system',
+            'scope': 'Programmable IV medication delivery pump',
+            'description': 'Drug delivery pump with pressure monitoring and alarms'
         },
         {
-            'dimension_key': 'PAYMENT_TERMS',
-            'domain': 'POWER_GRID',
-            'min_value': 30.0,
-            'max_value': 60.0,
-            'default_value': 45.0,
-            'flexibility': 'negotiable',
-            'notes': 'Power projects have tighter cash requirements.'
+            'name': 'Industrial Motor Control',
+            'system_function': 'Control speed and torque of induction motor',
+            'domain': 'industrial',
+            'system_level': 'subsystem',
+            'scope': '15kW 3-phase induction motor controller',
+            'description': 'Soft-start motor controller for factory automation'
         },
         {
-            'dimension_key': 'LOCAL_CONTENT_PERCENT',
-            'domain': 'POWER_GRID',
-            'min_value': 25.0,
-            'max_value': 40.0,
-            'default_value': 30.0,
-            'flexibility': 'negotiable',
-            'notes': 'Specialized power components often imported. Limited local options.'
+            'name': 'HVAC Compressor Unit',
+            'system_function': 'Compress refrigerant for heat transfer cycle',
+            'domain': 'industrial',
+            'system_level': 'component',
+            'scope': 'Refrigeration scroll compressor assembly',
+            'description': 'Oil-flooded refrigeration compressor with discharge valve'
         },
-        
-        # GLOBAL fallback policies
-        {
-            'dimension_key': 'MAINTENANCE_DURATION',
-            'domain': 'GLOBAL',
-            'min_value': 2.0,
-            'max_value': 5.0,
-            'default_value': 3.0,
-            'flexibility': 'flexible',
-            'notes': 'Default maintenance policy across all domains.'
-        },
-        {
-            'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-            'domain': 'GLOBAL',
-            'min_value': 1.0,
-            'max_value': 3.0,
-            'default_value': 2.0,
-            'flexibility': 'negotiable',
-            'notes': 'Standard warranty policy.'
-        },
-        {
-            'dimension_key': 'PAYMENT_TERMS',
-            'domain': 'GLOBAL',
-            'min_value': 30.0,
-            'max_value': 90.0,
-            'default_value': 60.0,
-            'flexibility': 'flexible',
-            'notes': 'Standard payment terms across domains.'
-        },
-        {
-            'dimension_key': 'LOCAL_CONTENT_PERCENT',
-            'domain': 'GLOBAL',
-            'min_value': 30.0,
-            'max_value': 50.0,
-            'default_value': 40.0,
-            'flexibility': 'negotiable',
-            'notes': 'Default local content target.'
-        }
     ]
     
-    for policy in policies:
-        dim_key = policy['dimension_key']
-        
-        if dim_key not in dimensions:
-            print(f"  ⚠ Skipping {dim_key} - not found in database")
-            continue
-        
-        dim_data = dimensions[dim_key]
-        
-        # Generate embedding
-        embedding = generate_policy_embedding(
-            dimension_name=dim_data['display_name'],
-            domain=policy['domain'],
-            min_value=policy['min_value'],
-            max_value=policy['max_value'],
-            flexibility=policy['flexibility'],
-            notes=policy['notes']
+    system_ids = []
+    for sys in systems:
+        sys_id = insert_and_return_id(
+            """INSERT INTO product_system 
+               (name, system_function, domain, system_level, scope, description)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (sys['name'], sys['system_function'], sys['domain'], 
+             sys['system_level'], sys['scope'], sys['description'])
+        )
+        system_ids.append(sys_id)
+        print(f"  ✓ {sys['name']} ({sys['domain']})")
+    
+    print(f"✓ Created {len(system_ids)} product systems\n")
+    return system_ids
+
+def seed_experts():
+    """Create expert profiles for team assignment"""
+    print("👥 Seeding expert profiles...")
+    
+    experts = [
+        {
+            'name': 'John Smith',
+            'department': 'Engineering',
+            'email': 'john.smith@company.com',
+            'expertise': ['product design', 'mechanical systems', 'stress analysis'],
+            'contact_info': 'Ext. 1234'
+        },
+        {
+            'name': 'Sarah Johnson',
+            'department': 'Quality',
+            'email': 'sarah.johnson@company.com',
+            'expertise': ['process control', 'statistical analysis', 'FMEA methodology'],
+            'contact_info': 'Ext. 1235'
+        },
+        {
+            'name': 'Mike Chen',
+            'department': 'Manufacturing',
+            'email': 'mike.chen@company.com',
+            'expertise': ['process capability', 'production equipment', 'lean manufacturing'],
+            'contact_info': 'Ext. 1236'
+        },
+        {
+            'name': 'Lisa Garcia',
+            'department': 'Engineering',
+            'email': 'lisa.garcia@company.com',
+            'expertise': ['reliability analysis', 'requirement definition', 'systems thinking'],
+            'contact_info': 'Ext. 1237'
+        },
+        {
+            'name': 'David Brown',
+            'department': 'Quality',
+            'email': 'david.brown@company.com',
+            'expertise': ['failure testing', 'test planning', 'data analysis'],
+            'contact_info': 'Ext. 1238'
+        },
+        {
+            'name': 'Jennifer Lee',
+            'department': 'Engineering',
+            'email': 'jen.lee@company.com',
+            'expertise': ['electrical systems', 'control logic', 'safety critical'],
+            'contact_info': 'Ext. 1239'
+        },
+        {
+            'name': 'Robert Martinez',
+            'department': 'Manufacturing',
+            'email': 'robert.martinez@company.com',
+            'expertise': ['equipment troubleshooting', 'worker safety', 'quality first'],
+            'contact_info': 'Ext. 1240'
+        },
+    ]
+    
+    expert_ids = []
+    for expert in experts:
+        # Generate embedding for expert skills
+        skills_emb = generate_expert_skills_embedding(
+            expert['expertise'],
+            expert['department'],
+            expert['name']
         )
         
         # Convert embedding to PostgreSQL array format
-        embedding_str = "[" + ",".join(map(str, embedding)) + "]"
+        embedding_str = "[" + ",".join(map(str, skills_emb)) + "]"
         
-        policy_id = insert_and_return_id(
-            """
-            INSERT INTO vendor_policy 
-            (vendor_id, dimension_id, domain, min_value, max_value, default_value, flexibility, notes, embedding)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
-            """,
-            (
-                vendor_id,
-                dim_data['id'],
-                policy['domain'],
-                policy['min_value'],
-                policy['max_value'],
-                policy['default_value'],
-                policy['flexibility'],
-                policy['notes'],
-                embedding_str
-            )
+        expert_id = insert_and_return_id(
+            """INSERT INTO expert_profile 
+               (name, department, email, expertise, skills_embedding, contact_info)
+               VALUES (%s, %s, %s, %s, %s::vector, %s)""",
+            (expert['name'], expert['department'], expert['email'],
+             json.dumps({"skills": expert['expertise']}), embedding_str, expert['contact_info'])
         )
-        
-        print(f"  ✓ Policy: {dim_data['display_name']} / {policy['domain']}")
+        expert_ids.append(expert_id)
+        print(f"  ✓ {expert['name']} - {expert['department']}")
     
-    print(f"✓ Created vendor policies\n")
+    print(f"✓ Created {len(expert_ids)} experts\n")
+    return expert_ids
 
-def seed_historical_proposals(vendor_id: int, dimensions: dict):
-    """Create historical proposals with decisions"""
-    print("Seeding historical proposals...")
+def seed_risk_factors():
+    """Create organizational risk factors and standards"""
+    print("📊 Seeding risk factors and standards...")
     
-    proposals = [
-        # WON proposals
+    # Risk factors define the S/O/D scale and guidance
+    risk_factors = [
         {
-            'tender_name': '2023 Metro North Rail HVAC System',
-            'domain': 'RAIL_HVAC',
-            'outcome': 'WON',
-            'outcome_reason': 'Our 5-year maintenance commitment and competitive pricing won the contract.',
-            'submitted_at': datetime(2023, 3, 15),
-            'decisions': [
-                {
-                    'dimension_key': 'MAINTENANCE_DURATION',
-                    'offered_value': 5.0,
-                    'justification': 'Offered 5 years to match client preference and demonstrate long-term commitment.',
-                    'source_excerpt': 'Client emphasized importance of extended maintenance. We positioned this as a strength given our rail HVAC track record.'
-                },
-                {
-                    'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-                    'offered_value': 3.0,
-                    'justification': 'Extended warranty to maximum policy to strengthen proposal.',
-                    'source_excerpt': 'Pushed warranty to 3 years despite cost impact. Confidence in our HVAC quality justified the risk.'
-                },
-                {
-                    'dimension_key': 'PAYMENT_TERMS',
-                    'offered_value': 60.0,
-                    'justification': 'Standard 60-day terms accepted by client.',
-                    'source_excerpt': 'No pressure on payment terms. Went with standard 60 days.'
-                },
-                {
-                    'dimension_key': 'LOCAL_CONTENT_PERCENT',
-                    'offered_value': 48.0,
-                    'justification': 'Exceeded minimum requirement to score higher on local content criteria.',
-                    'source_excerpt': 'Client weighted local content heavily. Leveraged our regional supplier network to reach 48%.'
-                }
-            ]
+            'factor_type': 'severity',
+            'name': 'Severity',
+            'guidance': '1=No effect, 5=Moderate effect on customer, 10=Safety hazard or non-compliance'
         },
         {
-            'tender_name': '2024 Eastern Suburbs Rail Climate Control',
-            'domain': 'RAIL_HVAC',
-            'outcome': 'WON',
-            'outcome_reason': 'Strong technical proposal with balanced maintenance terms.',
-            'submitted_at': datetime(2024, 6, 20),
-            'decisions': [
-                {
-                    'dimension_key': 'MAINTENANCE_DURATION',
-                    'offered_value': 4.0,
-                    'justification': 'Balanced commitment within policy comfort zone.',
-                    'source_excerpt': '4 years aligned with our capacity planning and client expectations.'
-                },
-                {
-                    'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-                    'offered_value': 2.0,
-                    'justification': 'Standard warranty sufficient for this project scale.',
-                    'source_excerpt': 'Standard 2-year warranty. No client pressure for extension.'
-                },
-                {
-                    'dimension_key': 'PAYMENT_TERMS',
-                    'offered_value': 75.0,
-                    'justification': 'Client requested extended terms, we accommodated within policy.',
-                    'source_excerpt': 'Client needed 75-day terms for budget cycles. Acceptable under our flexible payment policy.'
-                },
-                {
-                    'dimension_key': 'LOCAL_CONTENT_PERCENT',
-                    'offered_value': 45.0,
-                    'justification': 'Met requirement with standard supply chain.',
-                    'source_excerpt': 'Our default 45% local content met the 40% requirement comfortably.'
-                }
-            ]
+            'factor_type': 'occurrence',
+            'name': 'Occurrence',
+            'guidance': '1=Remote (< 0.01%), 5=Moderate (0.1-1%), 10=High (> 10%)'
         },
         {
-            'tender_name': '2024 Central Power Grid Expansion',
-            'domain': 'POWER_GRID',
-            'outcome': 'WON',
-            'outcome_reason': 'Technical excellence and realistic commitments.',
-            'submitted_at': datetime(2024, 9, 10),
-            'decisions': [
-                {
-                    'dimension_key': 'MAINTENANCE_DURATION',
-                    'offered_value': 3.0,
-                    'justification': 'Standard 3-year maintenance for power infrastructure.',
-                    'source_excerpt': 'Power grid projects typically 3 years. Matches our specialized team capacity.'
-                },
-                {
-                    'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-                    'offered_value': 2.0,
-                    'justification': 'Extended to maximum policy for competitive edge.',
-                    'source_excerpt': 'Pushed to 2-year warranty despite higher risk. Needed competitive advantage.'
-                },
-                {
-                    'dimension_key': 'PAYMENT_TERMS',
-                    'offered_value': 45.0,
-                    'justification': 'Standard terms for power sector.',
-                    'source_excerpt': 'Government client preferred shorter payment cycles. 45 days worked for both parties.'
-                }
-            ]
-        },
-        
-        # LOST proposals
-        {
-            'tender_name': '2023 Southern Rail Ventilation Upgrade',
-            'domain': 'RAIL_HVAC',
-            'outcome': 'LOST',
-            'outcome_reason': 'Competitor offered longer maintenance period at lower cost.',
-            'submitted_at': datetime(2023, 11, 5),
-            'decisions': [
-                {
-                    'dimension_key': 'MAINTENANCE_DURATION',
-                    'offered_value': 3.0,
-                    'justification': 'Offered minimum policy duration due to capacity constraints.',
-                    'source_excerpt': 'Team capacity limited. Could only commit to 3 years despite client preference for 5+.'
-                },
-                {
-                    'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-                    'offered_value': 2.0,
-                    'justification': 'Standard warranty offered.',
-                    'source_excerpt': 'Standard 2-year warranty. In retrospect, should have extended to 3 years.'
-                },
-                {
-                    'dimension_key': 'LOCAL_CONTENT_PERCENT',
-                    'offered_value': 38.0,
-                    'justification': 'Met minimum but competitor exceeded significantly.',
-                    'source_excerpt': 'Offered 38% local content. Competitor went to 55% which was decisive.'
-                }
-            ]
-        },
-        
-        # REJECTED proposals
-        {
-            'tender_name': '2024 Airport Rail Link HVAC',
-            'domain': 'RAIL_HVAC',
-            'outcome': 'REJECTED',
-            'outcome_reason': 'Payment terms unacceptable (120+ days), withdrew from tender.',
-            'submitted_at': datetime(2024, 2, 28),
-            'decisions': [
-                {
-                    'dimension_key': 'PAYMENT_TERMS',
-                    'offered_value': 90.0,
-                    'justification': 'Client demanded 120 days, we countered with 90, ultimately withdrew.',
-                    'source_excerpt': 'Client insisted on 120-day terms which exceeds our cash flow tolerance. Could only offer 90 days maximum. Declined to proceed.'
-                },
-                {
-                    'dimension_key': 'MAINTENANCE_DURATION',
-                    'offered_value': 6.0,
-                    'justification': 'Client required 6 years which stretches our capacity.',
-                    'source_excerpt': 'Required 6-year maintenance exceeded our comfort zone. Combined with payment terms, made project unviable.'
-                }
-            ]
+            'factor_type': 'detection',
+            'name': 'Detection',
+            'guidance': '1=Certain (100% detection), 5=Moderate (50% detection), 10=Uncertain (< 10% detection)'
         },
         {
-            'tender_name': '2023 Industrial Complex Power',
-            'domain': 'POWER_GRID',
-            'outcome': 'REJECTED',
-            'outcome_reason': 'Warranty requirements exceeded our risk tolerance.',
-            'submitted_at': datetime(2023, 8, 18),
-            'decisions': [
-                {
-                    'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-                    'offered_value': 2.0,
-                    'justification': 'Client demanded 5-year warranty, we could not justify risk.',
-                    'source_excerpt': 'Client required 5-year warranty on power infrastructure. Our maximum is 2 years. Risk assessment showed unacceptable exposure. Withdrew.'
-                },
-                {
-                    'dimension_key': 'LOCAL_CONTENT_PERCENT',
-                    'offered_value': 25.0,
-                    'justification': 'Client required 60% local content, beyond our supply chain capability.',
-                    'source_excerpt': 'Required 60% local content impossible with specialized power equipment. Our maximum is 40%. Rejected.'
-                }
-            ]
-        }
+            'factor_type': 'action_priority',
+            'name': 'Action Priority',
+            'guidance': '1=Low priority, 5=Medium priority, 10=Urgent/Critical'
+        },
     ]
     
-    for proposal_data in proposals:
-        # Generate proposal embedding
-        proposal_embedding = generate_proposal_embedding(
-            tender_name=proposal_data['tender_name'],
-            domain=proposal_data['domain'],
-            outcome=proposal_data['outcome'],
-            outcome_reason=proposal_data['outcome_reason']
+    factor_ids = {}
+    for factor in risk_factors:
+        factor_id = insert_and_return_id(
+            """INSERT INTO risk_factor 
+               (factor_type, name, scale_min, scale_max, guidance)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (factor['factor_type'], factor['name'], 1, 10, factor['guidance'])
         )
-        
-        proposal_embedding_str = "[" + ",".join(map(str, proposal_embedding)) + "]"
-        
-        # Insert proposal
-        proposal_id = insert_and_return_id(
-            """
-            INSERT INTO proposals 
-            (vendor_id, tender_name, domain, outcome, outcome_reason, submitted_at, embedding)
-            VALUES (%s, %s, %s, %s, %s, %s, %s::vector)
-            """,
-            (
-                vendor_id,
-                proposal_data['tender_name'],
-                proposal_data['domain'],
-                proposal_data['outcome'],
-                proposal_data['outcome_reason'],
-                proposal_data['submitted_at'],
-                proposal_embedding_str
-            )
-        )
-        
-        print(f"  ✓ Proposal: {proposal_data['tender_name']} ({proposal_data['outcome']})")
-        
-        # Insert proposal decisions
-        for decision in proposal_data['decisions']:
-            dim_key = decision['dimension_key']
-            
-            if dim_key not in dimensions:
-                print(f"    ⚠ Skipping decision for {dim_key} - dimension not found")
-                continue
-            
-            dim_data = dimensions[dim_key]
-            
-            decision_embedding = generate_decision_embedding(
-                dimension_name=dim_data['display_name'],
-                offered_value=float(decision['offered_value']),
-                justification=decision['justification'],
-                domain=proposal_data['domain'],
-                outcome=proposal_data['outcome'],
-                source_excerpt=decision['source_excerpt']
-            )
-            
-            decision_embedding_str = "[" + ",".join(map(str, decision_embedding)) + "]"
-            
-            insert_and_return_id(
-                """
-                INSERT INTO proposal_decisions
-                (proposal_id, dimension_id, offered_value, justification, source_excerpt, embedding)
-                VALUES (%s, %s, %s, %s, %s, %s::vector)
-                """,
-                (
-                    proposal_id,
-                    dim_data['id'],
-                    decision['offered_value'],
-                    decision['justification'],
-                    decision['source_excerpt'],
-                    decision_embedding_str
-                )
-            )
-        
-        print(f"    → {len(proposal_data['decisions'])} decisions recorded")
+        factor_ids[factor['factor_type']] = factor_id
+        print(f"  ✓ {factor['name']} - {factor['factor_type']}")
     
-    print(f"\n✓ Created {len(proposals)} historical proposals\n")
-
-def seed_demo_tenders(dimensions: dict):
-    """Create demo tenders for live evaluation"""
-    print("Seeding demo tenders...")
-    
-    tenders = [
+    # Organizational standards define acceptance thresholds per domain
+    standards = [
         {
-            'name': '2025 City Metro Expansion - Ventilation Control',
-            'domain': 'RAIL_HVAC',
-            'year': 2025,
-            'status': 'OPEN',
-            'requirements': [
-                {
-                    'dimension_key': 'MAINTENANCE_DURATION',
-                    'required_value': 6.0,
-                    'strictness': 'mandatory',
-                    'description': 'Extended 6-year maintenance required for whole-of-life support model.'
-                },
-                {
-                    'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-                    'required_value': 3.0,
-                    'strictness': 'mandatory',
-                    'description': 'Minimum 3-year warranty mandatory for this critical infrastructure.'
-                },
-                {
-                    'dimension_key': 'PAYMENT_TERMS',
-                    'required_value': 60.0,
-                    'strictness': 'preferred',
-                    'description': 'Standard 60-day payment terms preferred.'
-                },
-                {
-                    'dimension_key': 'LOCAL_CONTENT_PERCENT',
-                    'required_value': 50.0,
-                    'strictness': 'preferred',
-                    'description': 'Target 50% local content for job creation.'
-                }
-            ]
+            'domain': 'automotive',
+            'factor_type': 'severity',
+            'min_acceptable': 1,
+            'max_acceptable': 10,
+            'notes': 'All severity levels acceptable; RPN threshold is the control'
         },
         {
-            'name': '2025 Regional Rail HVAC Modernization',
-            'domain': 'RAIL_HVAC',
-            'year': 2025,
-            'status': 'OPEN',
-            'requirements': [
-                {
-                    'dimension_key': 'MAINTENANCE_DURATION',
-                    'required_value': 4.0,
-                    'strictness': 'mandatory',
-                    'description': 'Minimum 4-year maintenance contract required.'
-                },
-                {
-                    'dimension_key': 'WARRANTY_YEARS',  # ← FIXED
-                    'required_value': 2.0,
-                    'strictness': 'preferred',
-                    'description': 'Preference for 2+ year warranty but not mandatory.'
-                },
-                {
-                    'dimension_key': 'PAYMENT_TERMS',
-                    'required_value': 90.0,
-                    'strictness': 'mandatory',
-                    'description': 'Government budget cycles require 90-day payment terms.'
-                },
-                {
-                    'dimension_key': 'LOCAL_CONTENT_PERCENT',
-                    'required_value': 40.0,
-                    'strictness': 'preferred',
-                    'description': 'Target 40% local content for economic development.'
-                }
-            ]
-        }
+            'domain': 'automotive',
+            'factor_type': 'action_priority',
+            'min_acceptable': 1,
+            'max_acceptable': 100,  # This will be RPN-based
+            'notes': 'AIAG-VDA: RPN > 100 requires action'
+        },
+        {
+            'domain': 'medical',
+            'factor_type': 'severity',
+            'min_acceptable': 1,
+            'max_acceptable': 10,
+            'notes': 'Safety-critical domain; high severity items need strong controls'
+        },
+        {
+            'domain': 'medical',
+            'factor_type': 'action_priority',
+            'min_acceptable': 1,
+            'max_acceptable': 50,  # Stricter threshold
+            'notes': 'ISO 14971: RPN > 50 on safety items requires action'
+        },
+        {
+            'domain': 'industrial',
+            'factor_type': 'action_priority',
+            'min_acceptable': 1,
+            'max_acceptable': 75,
+            'notes': 'IEC 60812: Risk assessment required for critical items'
+        },
     ]
     
-    for tender_data in tenders:
-        # Insert tender
-        tender_id = insert_and_return_id(
-            """
-            INSERT INTO tenders (name, domain, year, status)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (tender_data['name'], tender_data['domain'], tender_data['year'], tender_data['status'])
+    for standard in standards:
+        if standard['factor_type'] not in factor_ids:
+            print(f"  ⚠ Skipping standard for {standard['factor_type']} - factor not found")
+            continue
+        
+        insert_and_return_id(
+            """INSERT INTO organizational_standard 
+               (domain, risk_factor_id, min_acceptable, max_acceptable, notes)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (standard['domain'], factor_ids[standard['factor_type']], 
+             standard['min_acceptable'], standard['max_acceptable'], standard['notes'])
         )
-        
-        print(f"  ✓ Tender: {tender_data['name']}")
-        
-        # Insert requirements
-        for req in tender_data['requirements']:
-            dim_key = req['dimension_key']
-            
-            if dim_key not in dimensions:
-                print(f"    ⚠ Skipping requirement for {dim_key} - dimension not found")
-                continue
-            
-            dim_data = dimensions[dim_key]
-            
-            req_embedding = generate_requirement_embedding(
-                dimension_name=dim_data['display_name'],
-                required_value=float(req['required_value']),
-                strictness=req['strictness'],
-                domain=tender_data['domain'],
-                description=req['description']
-            )
-            
-            req_embedding_str = "[" + ",".join(map(str, req_embedding)) + "]"
-            
-            insert_and_return_id(
-                """
-                INSERT INTO tender_requirements
-                (tender_id, dimension_id, required_value, strictness, description, embedding)
-                VALUES (%s, %s, %s, %s, %s, %s::vector)
-                """,
-                (
-                    tender_id,
-                    dim_data['id'],
-                    req['required_value'],
-                    req['strictness'],
-                    req['description'],
-                    req_embedding_str
-                )
-            )
-        
-        print(f"    → {len(tender_data['requirements'])} requirements added")
+        print(f"  ✓ Standard: {standard['domain']} - {standard['factor_type']}")
     
-    print(f"\n✓ Created {len(tenders)} demo tenders\n")
+    print()
+
+def seed_brake_system_failures(system_id: int):
+    """Seed brake system failure examples - placeholder for future implementation"""
+    # Failure modes require linking to FMEA records
+    # These should be created through the UI or via full FMEA project creation
+    pass
+
+def seed_medical_device_failures(system_id: int):
+    """Seed medical device failure examples - placeholder for future implementation"""
+    # Failure modes require linking to FMEA records
+    # These should be created through the UI or via full FMEA project creation
+    pass
+
+def seed_mitigation_actions():
+    """Seed mitigation action knowledge base - placeholder for future implementation"""
+    # Mitigation actions reference failure causes which don't exist in initial seed
+    # These should be created as part of FMEA analysis workflow
+    pass
+
+def seed_historical_fmea():
+    """Create historical FMEA records for pattern learning"""
+    print("📚 Seeding historical FMEA records...")
+    
+    historical = [
+        {
+            'product_name': 'Brake System - Model Year 2020',
+            'domain': 'automotive',
+            'system_function': 'Prevent vehicle movement through controlled friction',
+            'failure_modes_summary': {
+                'major': [
+                    'Fluid leak due to seal degradation',
+                    'ABS malfunction from sensor failure',
+                    'Brake fade from overheating',
+                    'Contamination of brake fluid',
+                    'Loss of pressure in hydraulic line'
+                ],
+                'count': 5
+            },
+            'effectiveness_summary': 'Successfully identified and mitigated 95% of failure modes',
+            'lessons_learned': 'Improved seal selection prevents 95% of leakage failures. Temperature-accelerated testing catches fatigue failures early.',
+            'key_findings': {'critical': 'Thermal cycling is primary degradation driver', 'improvement': 'Enhanced seal geometry'}
+        },
+        {
+            'product_name': 'Power Steering - MY2018',
+            'domain': 'automotive',
+            'system_function': 'Assist driver steering control with hydraulic pressure',
+            'failure_modes_summary': {
+                'major': [
+                    'Pump cavitation during rapid steering movements',
+                    'Hose burst from pressure cycling fatigue',
+                    'Control valve stiction from contaminant buildup',
+                    'Fluid temperature rise exceeding limits',
+                    'Seal erosion from particulate wear',
+                    'Filter bypass due to clogging',
+                    'Bearing wear in pump assembly',
+                    'Relief valve malfunction or drift'
+                ],
+                'count': 8
+            },
+            'effectiveness_summary': 'FMEA led to 40% reduction in warranty failures post-implementation',
+            'lessons_learned': 'Anti-cavitation design prevents pump noise. Pressure relief valve improvements reduce burst failures by 40%.',
+            'key_findings': {'critical': 'Pressure cycles cause material fatigue', 'improvement': 'Better relief valve design'}
+        },
+        {
+            'product_name': 'Cardiac Pacemaker v2.1',
+            'domain': 'medical',
+            'system_function': 'Deliver electrical stimulation to cardiac tissue',
+            'failure_modes_summary': {
+                'major': [
+                    'Electrode contact loss from passive fixation',
+                    'Current lead degradation from insulation breakdown',
+                    'Firmware reset causing loss of parameters',
+                    'Battery depletion faster than expected',
+                    'Connector corrosion from body fluid exposure',
+                    'Sensing failure due to signal loss'
+                ],
+                'count': 6
+            },
+            'effectiveness_summary': 'Identified key design improvements reducing patient safety risk',
+            'lessons_learned': 'Active fixation electrodes reduce contact loss from 2% to 0.1%. Hermetic sealing prevents corrosion failures.',
+            'key_findings': {'critical': 'Electrode fixation is primary concern', 'improvement': 'Active fixation technology'}
+        },
+    ]
+    
+    for rec in historical:
+        # Generate summary embedding
+        summary_emb = generate_system_function_embedding(
+            rec['system_function'],
+            rec['lessons_learned'],
+            rec['domain'],
+            rec['product_name']
+        )
+        summary_embedding_str = "[" + ",".join(map(str, summary_emb)) + "]"
+        
+        insert_and_return_id(
+            """INSERT INTO historical_fmea 
+               (domain, system_function, product_name, failure_modes_summary, effectiveness_summary, 
+                lessons_learned, key_findings, summary_embedding)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector)""",
+            (rec['domain'], rec['system_function'], rec['product_name'],
+             json.dumps(rec['failure_modes_summary']), rec['effectiveness_summary'],
+             rec['lessons_learned'], json.dumps(rec['key_findings']),
+             summary_embedding_str)
+        )
+        print(f"  ✓ {rec['product_name']}")
+    
+    print()
 
 def main():
-    """Main seed execution"""
-    print("=" * 60)
-    print("DecisionLedger - Seed Data Generator")
-    print("=" * 60)
-    print()
+    """Execute all seeding operations"""
+    print("\n" + "="*60)
+    print("FMEA DATABASE SEEDING")
+    print("="*60 + "\n")
     
     try:
-        # Clear existing data
         clear_existing_data()
         
-        # Load dimensions from database
-        dimensions = load_dimensions()
+        system_ids = seed_product_systems()
+        seed_experts()
+        seed_risk_factors()
         
-        # Seed in order (respecting foreign keys)
-        vendor_id = seed_vendor()
-        seed_vendor_policies(vendor_id, dimensions)
-        seed_historical_proposals(vendor_id, dimensions)
-        seed_demo_tenders(dimensions)
+        # Seed specific failure examples for learning
+        seed_brake_system_failures(system_ids[0])  # Brake System
+        seed_medical_device_failures(system_ids[3])  # Pacemaker
         
-        print("=" * 60)
-        print("✓ SEEDING COMPLETE")
-        print("=" * 60)
-        print()
-        print("Next steps:")
-        print("1. Start backend: docker-compose up -d")
-        print("2. Open: http://localhost:8000")
-        print("3. Try canvas view: http://localhost:8000/tender/1/canvas")
-        print()
+        seed_mitigation_actions()
+        seed_historical_fmea()
+        
+        print("="*60)
+        print("✅ SEEDING COMPLETE")
+        print("="*60)
+        print("\nDatabase is ready for FMEA analysis!")
+        print("\nTo create a new FMEA project:")
+        print("  1. Start the application: uvicorn app.main:app --reload")
+        print("  2. Open http://localhost:8000/")
+        print("  3. Click 'Create New FMEA' and select a product system")
+        print("\n")
         
     except Exception as e:
-        print(f"\n✗ Seeding failed: {e}")
+        print(f"\n❌ SEEDING FAILED: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

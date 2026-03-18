@@ -1,203 +1,737 @@
 """
-FastAPI application for DecisionLedger POC.
-Server-rendered HTML interface for tender evaluation.
-All decisions stored in memory (no database persistence for POC).
+FastAPI application for FMEA (Failure Mode and Effects Analysis).
+Server-rendered HTML interface for structured 7-phase FMEA workflow.
+Based on AIAG-VDA FMEA 4.0 Harmonized Standard.
 """
 
-from datetime import datetime
+from datetime import datetime, date
 import os
-import re
+import json
+from typing import Optional, List
 
-from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Query, Path
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from decimal import Decimal
-from typing import Optional
-from fastapi.responses import StreamingResponse
 
-from app.database import fetch_all, fetch_one
-from app.reasoning import reason_about_requirement
-from app.models import DecisionUpdate, ReasoningResult
-from app.document_ingestion import (
-    detect_file_type,
-    is_scanned_pdf,
-    extract_with_pypdf,
-    extract_with_ocr,
-    extract_with_excel,
-    normalize_document,
-    chunk_document
+from app.database import (
+    get_fmea_record, get_fmea_records, create_fmea_record, update_fmea_record,
+    get_product_system, get_product_systems, create_product_system,
+    get_failure_mode, get_failure_modes, create_failure_mode, update_failure_mode,
+    get_failure_cause, get_failure_causes, create_failure_cause, update_failure_cause,
+    get_current_control, get_current_controls, create_current_control,
+    get_risk_score, create_risk_score, calculate_rpn, get_high_priority_failures,
+    get_mitigation_action, get_mitigation_actions, get_fmea_actions,
+    create_mitigation_action, update_mitigation_action,
+    create_post_action_risk_score, get_expert, get_all_experts, get_experts_by_ids,
+    get_historical_fmea, get_historical_fmeas,
+    mark_fmea_phase_complete
 )
-
+from app.models import (
+    FMEARecord, ProductSystem, FailureMode, FailureCause, CurrentControl,
+    RiskScore, MitigationAction, ExpertProfile, APIResponse
+)
+from app.reasoning import (
+    suggest_failure_modes, suggest_team_experts, suggest_mitigation_actions,
+    assess_risk_against_standards, generate_ishikawa_analysis,
+    extract_lessons_learned, reason_about_failure_mode
+)
+from app.embeddings import (
+    generate_failure_mode_embedding, generate_failure_cause_embedding,
+    generate_mitigation_action_embedding, generate_expert_skills_embedding,
+    test_embedding_service
+)
+from app.document_ingestion import (
+    detect_file_type, extract_with_pypdf, extract_with_ocr,
+    extract_with_excel, normalize_document
+)
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="DecisionLedger",
-    description="AI-powered tender evaluation with historical memory",
-    version="1.0.0"
+    title="FMEA Application",
+    description="AI-powered Failure Mode and Effects Analysis",
+    version="1.0.0",
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json"
 )
 
-# In-memory store for decisions (POC - no database persistence)
-# Structure: {tender_id: {dimension_key: {offered_value, justification, saved_at}}}
-decisions_store = {}
-
-# Mount static files only if directory exists
+# Mount static files
 static_dir = "app/static"
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
-else:
-    print(f"Warning: Static directory '{static_dir}' not found. Skipping static file mounting.")
 
 # Setup Jinja2 templates
 templates = Jinja2Templates(directory="app/templates")
 
-# Helper to format currency/numbers
-def format_number(value, unit: str = "") -> str:
-    """Format numbers for display"""
-    if value is None:
-        return "N/A"
-    
-    if isinstance(value, Decimal):
-        value = float(value)
-    
-    if unit == "%":
-        return f"{value:.1f}%"
-    elif unit == "days":
-        return f"{int(value)} days"
-    elif unit == "years":
-        return f"{value:.1f} years"
-    else:
-        return f"{value:.1f}"
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
 
-# Add custom filter to Jinja2
-templates.env.filters['format_number'] = format_number
+def parse_expert_ids(ids_json: Optional[str]) -> List[int]:
+    """Parse JSON expert IDs"""
+    if not ids_json:
+        return []
+    try:
+        return json.loads(ids_json)
+    except:
+        return []
 
 # ============================================================================
-# HTML PAGES
+# HOME & DASHBOARD
 # ============================================================================
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """
-    Home page - Project overview and introduction to DecisionLedger
-    """
-    return templates.TemplateResponse("index.html", {
-        "request": request
+    """Home page - FMEA project dashboard"""
+    fmea_records = get_fmea_records()
+    
+    # Statistics
+    total_fmeas = len(fmea_records)
+    completed = sum(1 for f in fmea_records if f['status'] == 'completed')
+    in_progress = sum(1 for f in fmea_records if f['status'] == 'in_progress')
+    
+    return templates.TemplateResponse("fmea_dashboard.html", {
+        "request": request,
+        "fmea_records": fmea_records,
+        "total_fmeas": total_fmeas,
+        "completed": completed,
+        "in_progress": in_progress
+    })
+
+# ============================================================================
+# FMEA PROJECT MANAGEMENT
+# ============================================================================
+
+@app.get("/fmea/new", response_class=HTMLResponse)
+async def fmea_new(request: Request):
+    """Create new FMEA - Phase 1 Planning"""
+    product_systems = get_product_systems()
+    
+    return templates.TemplateResponse("fmea_new.html", {
+        "request": request,
+        "product_systems": product_systems
+    })
+
+@app.post("/fmea/create")
+async def create_fmea(
+    product_system_id: int = Form(...),
+    project_name: str = Form(...),
+    description: str = Form(default=""),
+    created_by: str = Form(default="admin")
+):
+    """Create new FMEA project"""
+    try:
+        fmea_id = create_fmea_record(
+            product_system_id=product_system_id,
+            project_name=project_name,
+            description=description,
+            created_by=created_by
+        )
+        
+        return RedirectResponse(f"/fmea/{fmea_id}/phase/planning", status_code=303)
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/fmea/{fmea_id}", response_class=HTMLResponse)
+async def fmea_overview(request: Request, fmea_id: int):
+    """Overview of FMEA project - show current phase and progress"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404, detail="FMEA not found")
+    
+    product_system = get_product_system(fmea['product_system_id'])
+    
+    # Get statistics
+    failure_modes = get_failure_modes(fmea_id)
+    total_modes = len(failure_modes)
+    total_causes = sum(len(get_failure_causes(fm['id'])) for fm in failure_modes)
+    actions = get_fmea_actions(fmea_id)
+    
+    return templates.TemplateResponse("fmea_overview.html", {
+        "request": request,
+        "fmea": fmea,
+        "product_system": product_system,
+        "total_modes": total_modes,
+        "total_causes": total_causes,
+        "total_actions": len(actions),
+        "completed_actions": sum(1 for a in actions if a['status'] == 'completed')
+    })
+
+# ============================================================================
+# PHASE 1: PLANNING
+# ============================================================================
+
+@app.get("/fmea/{fmea_id}/phase/planning", response_class=HTMLResponse)
+async def phase_planning(request: Request, fmea_id: int):
+    """Phase 1: Planning - Define team and project scope"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404)
+    
+    all_experts = get_all_experts()
+    product_system = get_product_system(fmea['product_system_id'])
+    
+    # Get suggested experts
+    suggested_experts = suggest_team_experts(
+        product_system['system_function'],
+        product_system['domain'],
+        ['design', 'quality', 'manufacturing'],
+        limit=10
+    )
+    
+    return templates.TemplateResponse("phase_planning.html", {
+        "request": request,
+        "fmea": fmea,
+        "product_system": product_system,
+        "all_experts": all_experts,
+        "suggested_experts": suggested_experts
+    })
+
+@app.post("/fmea/{fmea_id}/assign-team")
+async def assign_team(
+    fmea_id: int = Path(...),
+    team_leads: str = Form(default="[]"),
+    team_members: str = Form(default="[]")
+):
+    """Assign team members to FMEA"""
+    try:
+        leads = parse_expert_ids(team_leads)
+        members = parse_expert_ids(team_members)
+        
+        update_fmea_record(
+            fmea_id,
+            team_leads=json.dumps(leads),
+            team_members=json.dumps(members)
+        )
+        
+        mark_fmea_phase_complete(fmea_id, 'planning', 'Team assigned')
+        
+        return RedirectResponse(f"/fmea/{fmea_id}", status_code=303)
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# ============================================================================
+# PHASE 2: STRUCTURAL ANALYSIS
+# ============================================================================
+
+@app.get("/fmea/{fmea_id}/phase/structural", response_class=HTMLResponse)
+async def phase_structural(request: Request, fmea_id: int):
+    """Phase 2: Structural Analysis - Define system elements"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404)
+    
+    product_system = get_product_system(fmea['product_system_id'])
+    
+    return templates.TemplateResponse("phase_structural.html", {
+        "request": request,
+        "fmea": fmea,
+        "product_system": product_system
+    })
+
+# ============================================================================
+# PHASE 3: FUNCTIONAL ANALYSIS
+# ============================================================================
+
+@app.get("/fmea/{fmea_id}/phase/functional", response_class=HTMLResponse)
+async def phase_functional(request: Request, fmea_id: int):
+    """Phase 3: Function Analysis - Extract and review functions"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404)
+    
+    product_system = get_product_system(fmea['product_system_id'])
+    
+    return templates.TemplateResponse("phase_functional.html", {
+        "request": request,
+        "fmea": fmea,
+        "product_system": product_system
+    })
+
+@app.post("/fmea/{fmea_id}/upload-document")
+async def upload_document(fmea_id: int, file: UploadFile = File(...)):
+    """Upload and extract text from technical document"""
+    try:
+        # Read file
+        content = await file.read()
+        
+        # Detect type and extract
+        file_type = detect_file_type(file.filename)
+        
+        if file_type == 'pdf':
+            text = extract_with_pypdf(content)
+            if not text:  # Try OCR if PyPDF fails
+                text = extract_with_ocr(content)
+        elif file_type == 'excel':
+            text = extract_with_excel(content)
+        else:
+            text = content.decode('utf-8', errors='ignore')
+        
+        # Normalize
+        text = normalize_document(text)
+        
+        return JSONResponse({
+            "success": True,
+            "text": text,
+            "file_type": file_type
+        })
+    
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=400)
+
+# ============================================================================
+# PHASE 4: FAILURE ANALYSIS
+# ============================================================================
+
+@app.get("/fmea/{fmea_id}/phase/failure", response_class=HTMLResponse)
+async def phase_failure(request: Request, fmea_id: int):
+    """Phase 4: Failure Analysis - Identify failure modes and causes"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404)
+    
+    product_system = get_product_system(fmea['product_system_id'])
+    failure_modes = get_failure_modes(fmea_id)
+    
+    # Get suggestions for failure modes
+    suggested_modes = suggest_failure_modes(
+        product_system['system_function'],
+        product_system['domain'],
+        fmea['product_system_id'],
+        limit=10
+    )
+    
+    return templates.TemplateResponse("phase_failure.html", {
+        "request": request,
+        "fmea": fmea,
+        "product_system": product_system,
+        "failure_modes": failure_modes,
+        "suggested_modes": suggested_modes
+    })
+
+@app.post("/fmea/{fmea_id}/add-failure-mode")
+async def add_failure_mode(
+    fmea_id: int = Path(...),
+    product_system_id: int = Form(...),
+    mode_type: str = Form(...),
+    description: str = Form(...),
+    potential_effects: str = Form(default=""),
+    severity_score: int = Form(default=5),
+    source: str = Form(default="brainstorm")
+):
+    """Add new failure mode"""
+    try:
+        # Generate embedding
+        embedding = generate_failure_mode_embedding(
+            description, mode_type, potential_effects
+        )
+        
+        mode_id = create_failure_mode(
+            fmea_id, product_system_id, mode_type, description,
+            potential_effects, severity_score, source, embedding
+        )
+        
+        return JSONResponse({"success": True, "failure_mode_id": mode_id})
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/fmea/{fmea_id}/add-cause")
+async def add_failure_cause(
+    fmea_id: int = Path(...),
+    failure_mode_id: int = Form(...),
+    cause_description: str = Form(...),
+    ishikawa_category: str = Form(default=None),
+    occurrence_score: int = Form(default=5)
+):
+    """Add failure cause"""
+    try:
+        embedding = generate_failure_cause_embedding(
+            cause_description, ishikawa_category
+        )
+        
+        cause_id = create_failure_cause(
+            failure_mode_id, cause_description,
+            ishikawa_category, occurrence_score, embedding
+        )
+        
+        return JSONResponse({"success": True, "failure_cause_id": cause_id})
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/fmea/{fmea_id}/ishikawa/{failure_mode_id}", response_class=HTMLResponse)
+async def ishikawa_view(request: Request, fmea_id: int, failure_mode_id: int):
+    """View Ishikawa diagram for failure mode"""
+    failure_mode = get_failure_mode(failure_mode_id)
+    if not failure_mode:
+        raise HTTPException(status_code=404)
+    
+    causes = get_failure_causes(failure_mode_id)
+    ishikawa_data = generate_ishikawa_analysis(
+        failure_mode, [FailureCause(**c) for c in causes]
+    )
+    
+    return templates.TemplateResponse("ishikawa_diagram.html", {
+        "request": request,
+        "fmea_id": fmea_id,
+        "failure_mode": failure_mode,
+        "ishikawa_data": ishikawa_data
+    })
+
+# ============================================================================
+# PHASE 5: RISK ANALYSIS
+# ============================================================================
+
+@app.get("/fmea/{fmea_id}/phase/risk", response_class=HTMLResponse)
+async def phase_risk(request: Request, fmea_id: int):
+    """Phase 5: Risk Analysis - Score and prioritize failures"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404)
+    
+    product_system = get_product_system(fmea['product_system_id'])
+    failure_modes = get_failure_modes(fmea_id)
+    
+    # Get high-priority failures
+    high_priority = get_high_priority_failures(fmea_id, rpn_threshold=100)
+    
+    return templates.TemplateResponse("phase_risk.html", {
+        "request": request,
+        "fmea": fmea,
+        "product_system": product_system,
+        "failure_modes": failure_modes,
+        "high_priority_count": len(high_priority)
+    })
+
+@app.post("/fmea/{fmea_id}/score-risk")
+async def score_risk(
+    fmea_id: int = Path(...),
+    failure_cause_id: int = Form(...),
+    severity: int = Form(...),
+    occurrence: int = Form(...),
+    detection: int = Form(...),
+    domain: str = Form(...)
+):
+    """Score risk (S/O/D) and calculate RPN"""
+    try:
+        rpn = calculate_rpn(severity, occurrence, detection)
+        rpn, ap, recommendation = assess_risk_against_standards(
+            severity, occurrence, detection, domain
+        )
+        
+        score_id = create_risk_score(
+            failure_cause_id, severity, occurrence, detection, ap
+        )
+        
+        return JSONResponse({
+            "success": True,
+            "risk_score_id": score_id,
+            "rpn": rpn,
+            "action_priority": ap,
+            "recommendation": recommendation
+        })
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/fmea/{fmea_id}/add-control")
+async def add_current_control(
+    fmea_id: int = Path(...),
+    failure_cause_id: int = Form(...),
+    control_description: str = Form(...),
+    control_type: str = Form(...),
+    detection_score: int = Form(default=5)
+):
+    """Add current control (prevention/detection)"""
+    try:
+        control_id = create_current_control(
+            failure_cause_id, control_description,
+            control_type, detection_score
+        )
+        
+        return JSONResponse({"success": True, "control_id": control_id})
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/fmea/{fmea_id}/risk-matrix", response_class=JSONResponse)
+async def get_risk_matrix(fmea_id: int):
+    """Get risk matrix visualization data"""
+    failure_modes = get_failure_modes(fmea_id)
+    
+    matrix_data = []
+    for mode in failure_modes:
+        causes = get_failure_causes(mode['id'])
+        for cause in causes:
+            risk = get_risk_score(cause['id'])
+            if risk:
+                matrix_data.append({
+                    "failure": mode['description'],
+                    "severity": risk['severity'],
+                    "occurrence": risk['occurrence'],
+                    "detection": risk['detection'],
+                    "rpn": risk['rpn']
+                })
+    
+    return {"matrix_data": matrix_data}
+
+# ============================================================================
+# PHASE 6: OPTIMIZATION
+# ============================================================================
+
+@app.get("/fmea/{fmea_id}/phase/optimization", response_class=HTMLResponse)
+async def phase_optimization(request: Request, fmea_id: int):
+    """Phase 6: Optimization - Plan and track mitigation actions"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404)
+    
+    actions = get_fmea_actions(fmea_id)
+    high_priority = get_high_priority_failures(fmea_id, rpn_threshold=100)
+    
+    return templates.TemplateResponse("phase_optimization.html", {
+        "request": request,
+        "fmea": fmea,
+        "actions": actions,
+        "high_priority_count": len(high_priority)
+    })
+
+@app.post("/fmea/{fmea_id}/suggest-actions/{failure_cause_id}")
+async def suggest_actions_for_cause(
+    fmea_id: int,
+    failure_cause_id: int,
+    domain: str = Query(...)
+):
+    """Get AI-suggested mitigation actions"""
+    try:
+        cause = get_failure_cause(failure_cause_id)
+        if not cause:
+            raise HTTPException(status_code=404)
+        
+        cause_obj = FailureCause(**cause)
+        suggestions = suggest_mitigation_actions(cause_obj, domain, limit=5)
+        
+        return JSONResponse({
+            "success": True,
+            "suggestions": [s.dict() for s in suggestions]
+        })
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/fmea/{fmea_id}/add-action")
+async def add_mitigation_action(
+    fmea_id: int = Path(...),
+    failure_cause_id: int = Form(...),
+    action_description: str = Form(...),
+    action_type: str = Form(default=None),
+    responsibility: str = Form(default=None),
+    target_date: str = Form(default=None)
+):
+    """Add mitigation action"""
+    try:
+        embedding = generate_mitigation_action_embedding(
+            action_description, action_type
+        )
+        
+        action_id = create_mitigation_action(
+            failure_cause_id, action_description,
+            action_type, responsibility, target_date, embedding
+        )
+        
+        return JSONResponse({"success": True, "action_id": action_id})
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/fmea/{fmea_id}/re-score-risk")
+async def rescore_risk(
+    fmea_id: int = Path(...),
+    mitigation_action_id: int = Form(...),
+    failure_cause_id: int = Form(...),
+    new_severity: int = Form(default=None),
+    new_occurrence: int = Form(default=None),
+    new_detection: int = Form(default=None),
+    effectiveness_rating: int = Form(default=None)
+):
+    """Record post-action risk score"""
+    try:
+        post_score_id = create_post_action_risk_score(
+            mitigation_action_id, failure_cause_id,
+            new_severity, new_occurrence, new_detection,
+            effectiveness_rating
+        )
+        
+        return JSONResponse({
+            "success": True,
+            "post_score_id": post_score_id
+        })
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# ============================================================================
+# PHASE 7: DOCUMENTATION
+# ============================================================================
+
+@app.get("/fmea/{fmea_id}/phase/documentation", response_class=HTMLResponse)
+async def phase_documentation(request: Request, fmea_id: int):
+    """Phase 7: Documentation - Final review and lessons learned"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404)
+    
+    product_system = get_product_system(fmea['product_system_id'])
+    failure_modes = get_failure_modes(fmea_id)
+    high_priority = get_high_priority_failures(fmea_id, rpn_threshold=100)
+    actions = get_fmea_actions(fmea_id)
+    
+    # Extract lessons learned
+    lessons = extract_lessons_learned(
+        product_system['domain'],
+        high_priority
+    )
+    
+    return templates.TemplateResponse("phase_documentation.html", {
+        "request": request,
+        "fmea": fmea,
+        "product_system": product_system,
+        "total_modes": len(failure_modes),
+        "high_priority_count": len(high_priority),
+        "total_actions": len(actions),
+        "lessons_learned": lessons
+    })
+
+@app.get("/fmea/{fmea_id}/report", response_class=HTMLResponse)
+async def get_fmea_report(request: Request, fmea_id: int):
+    """Generate FMEA report for display/print/export"""
+    fmea = get_fmea_record(fmea_id)
+    if not fmea:
+        raise HTTPException(status_code=404)
+    
+    product_system = get_product_system(fmea['product_system_id'])
+    failure_modes = get_failure_modes(fmea_id)
+    
+    # Build FMEA table
+    fmea_table = []
+    for mode in failure_modes:
+        causes = get_failure_causes(mode['id'])
+        for cause in causes:
+            controls = get_current_controls(cause['id'])
+            risk = get_risk_score(cause['id'])
+            actions = get_mitigation_actions(cause['id'])
+            
+            fmea_table.append({
+                "failure_mode": mode,
+                "failure_cause": cause,
+                "controls": controls,
+                "risk_score": risk,
+                "actions": actions
+            })
+    
+    return templates.TemplateResponse("fmea_report.html", {
+        "request": request,
+        "fmea": fmea,
+        "product_system": product_system,
+        "fmea_table": fmea_table
+    })
+
+@app.post("/fmea/{fmea_id}/close")
+async def close_fmea(fmea_id: int = Path(...)):
+    """Mark FMEA as complete"""
+    try:
+        update_fmea_record(fmea_id, status='completed')
+        mark_fmea_phase_complete(fmea_id, 'documentation', 'FMEA closed')
+        
+        return RedirectResponse(f"/fmea/{fmea_id}", status_code=303)
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# ============================================================================
+# UTILITY ENDPOINTS
+# ============================================================================
+
+@app.get("/experts", response_class=HTMLResponse)
+async def browse_experts(request: Request):
+    """Browse/manage expert pool"""
+    experts = get_all_experts()
+    
+    return templates.TemplateResponse("expert_pool.html", {
+        "request": request,
+        "experts": experts
     })
 
 @app.get("/history", response_class=HTMLResponse)
-async def history(request: Request):
-    """
-    History page - Show all historical proposals grouped by outcome
-    """
-    # Fetch all proposals
-    proposals = fetch_all("""
-        SELECT 
-            p.*,
-            COUNT(pd.id) as decision_count
-        FROM proposals p
-        LEFT JOIN proposal_decisions pd ON p.id = pd.proposal_id
-        GROUP BY p.id
-        ORDER BY p.submitted_at DESC
-    """)
+async def browse_history(request: Request, domain: str = None):
+    """Browse historical FMEAs"""
+    historical = get_historical_fmeas(domain)
     
-    # Group by outcome
-    won_proposals = [p for p in proposals if p['outcome'] == 'WON']
-    lost_proposals = [p for p in proposals if p['outcome'] == 'LOST']
-    rejected_proposals = [p for p in proposals if p['outcome'] == 'REJECTED']
-    
-    return templates.TemplateResponse("history.html", {
+    return templates.TemplateResponse("historical_fmea_list.html", {
         "request": request,
-        "won_proposals": won_proposals,
-        "lost_proposals": lost_proposals,
-        "rejected_proposals": rejected_proposals
+        "historical_fmeas": historical,
+        "selected_domain": domain
     })
 
-@app.get("/proposal/{proposal_id}", response_class=HTMLResponse)
-async def proposal_detail(request: Request, proposal_id: int):
-    """
-    Proposal detail page - Show all decisions for a specific proposal
-    """
-    # Fetch proposal
-    proposal = fetch_one(
-        "SELECT * FROM proposals WHERE id = %s",
-        (proposal_id,)
-    )
+@app.get("/history/{fmea_id}", response_class=HTMLResponse)
+async def view_historical_fmea(request: Request, fmea_id: int = Path(...)):
+    """View detailed historical FMEA record"""
+    fmea = get_historical_fmea(fmea_id)
     
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Proposal not found")
+    if not fmea:
+        raise HTTPException(status_code=404, detail="Historical FMEA not found")
     
-    # Fetch all decisions for this proposal
-    decisions = fetch_all("""
-        SELECT 
-            pd.*,
-            ed.key as dimension_key,
-            ed.display_name as dimension_name,
-            ed.unit as dimension_unit
-        FROM proposal_decisions pd
-        JOIN evaluation_dimension ed ON pd.dimension_id = ed.id
-        WHERE pd.proposal_id = %s
-        ORDER BY ed.display_name
-    """, (proposal_id,))
+    # Parse JSONB fields
+    failure_modes_summary = fmea.get('failure_modes_summary', {})
+    if isinstance(failure_modes_summary, str):
+        try:
+            failure_modes_summary = json.loads(failure_modes_summary)
+        except:
+            failure_modes_summary = {}
     
-    return templates.TemplateResponse("proposal_detail.html", {
+    key_findings = fmea.get('key_findings', {})
+    if isinstance(key_findings, str):
+        try:
+            key_findings = json.loads(key_findings)
+        except:
+            key_findings = {}
+    
+    return templates.TemplateResponse("historical_fmea_detail.html", {
         "request": request,
-        "proposal": proposal,
-        "decisions": decisions
+        "fmea": fmea,
+        "failure_modes_summary": failure_modes_summary,
+        "key_findings": key_findings,
+        "current_time": datetime.now().strftime('%B %d, %Y at %I:%M %p')
     })
 
-@app.get("/tender/{tender_id}", response_class=HTMLResponse)
-async def tender_page(
-    request: Request, 
-    tender_id: int,
-    dimension: str = "MAINTENANCE_DURATION"
-):
-    """
-    Tender evaluation page - Main interface for evaluating a tender
-    Shows one dimension at a time with reasoning and evidence
-    Handles both database dimensions and new extracted dimensions (memory store)
-    """
-    # Fetch tender
-    tender = fetch_one(
-        "SELECT * FROM tenders WHERE id = %s",
-        (tender_id,)
-    )
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint"""
+    embedding_ok = test_embedding_service()
     
-    if not tender:
-        raise HTTPException(status_code=404, detail="Tender not found")
-    
-    # Get all dimensions for this tender FROM DATABASE
-    all_dimensions = fetch_all("""
-        SELECT DISTINCT
-            ed.key,
-            ed.display_name,
-            ed.unit
-        FROM tender_requirements tr
-        JOIN evaluation_dimension ed ON tr.dimension_id = ed.id
-        WHERE tr.tender_id = %s
-        ORDER BY ed.display_name
-    """, (tender_id,))
-    
-    # Add any new dimensions from memory store (extracted by Groq)
-    all_dim_keys = {d['key'] for d in all_dimensions}
-    if tender_id in decisions_store:
-        for mem_dimension in decisions_store[tender_id].keys():
-            if mem_dimension not in all_dim_keys:
-                # New dimension from extraction - add to list
-                all_dimensions.append({
-                    'key': mem_dimension,
-                    'display_name': mem_dimension.replace('_', ' ').title(),
-                    'unit': 'N/A'
-                })
-    
-    # Get reasoning for current dimension (with graceful fallback for new dimensions)
-    reasoning_result = None
-    try:
-        reasoning_result = reason_about_requirement(tender_id, dimension)
-    except Exception as e:
-        print(f"⚠️ Could not get reasoning for {dimension}: {e}")
-        # Continue without reasoning for new/extracted dimensions
-        reasoning_result = None
+    return JSONResponse({
+        "status": "ok",
+        "embedding_service": "ok" if embedding_ok else "degraded"
+    })
+
+# ============================================================================
+# ERROR HANDLERS
+# ============================================================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Custom HTTP exception handler"""
+    return templates.TemplateResponse("error.html", {
+        "request": request,
+        "status_code": exc.status_code,
+        "detail": exc.detail
+    }, status_code=exc.status_code)
     
     # Check if user has already made a decision for this dimension (from memory)
     existing_decision = None

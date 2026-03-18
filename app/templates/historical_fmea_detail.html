@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+
+{% block title %}{{ fmea.product_name }} - Failure Modes Analysis{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>{{ fmea.product_name or 'System Analysis' }}</h1>
+        <p style="color: #7f8c8d; margin-top: 0.5rem;">
+            <strong>Domain:</strong> {{ fmea.domain | title }} | 
+            <strong>Created:</strong> {{ fmea.created_at or 'Unknown Date' }} |
+            <strong>Last Updated:</strong> {{ fmea.updated_at or 'N/A' }}
+        </p>
+    </div>
+    
+    <!-- Detailed Failure Modes Analysis Section - PRIMARY FOCUS -->
+    <div class="card" style="border-top: 5px solid #ff5722; background: linear-gradient(135deg, #fff8f5 0%, #ffffff 100%);">
+        <h2 style="color: #c62828; margin-top: 0; font-size: 1.8rem;">⚠️ Identified Failure Modes</h2>
+        
+        {% if failure_modes_summary and failure_modes_summary.major %}
+            <div style="background: #fff3cd; padding: 2rem; border-radius: 8px; border-left: 6px solid #ff9800; margin-bottom: 1.5rem;">
+                <p style="margin: 0 0 1rem 0; color: #666; font-weight: 500;">Total Failure Modes Identified: <span style="font-size: 2rem; color: #ff6f00; font-weight: bold;">{{ failure_modes_summary.count }}</span></p>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.2rem;">
+                    {% for mode in failure_modes_summary.major %}
+                    <div style="background: white; padding: 1.5rem; border-radius: 6px; border-left: 5px solid #ff6f00; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                        <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
+                            <span style="font-size: 1.5rem; color: #ff6f00; margin-right: 0.5rem;">🔴</span>
+                            <h3 style="margin: 0; color: #333; font-size: 1.2rem;">{{ mode }}</h3>
+                        </div>
+                        <p style="margin: 0.5rem 0 0 0; color: #666; font-size: 0.95rem;">Critical failure mode identified during analysis</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% else %}
+            <p style="color: #7f8c8d;">No failure modes summary available.</p>
+        {% endif %}
+    </div>
+    
+    <!-- System Overview Section -->
+    <div class="card">
+        <h2>📋 System Overview</h2>
+        <div class="two-column">
+            <div>
+                <h3>System Function</h3>
+                <p>{{ fmea.system_function }}</p>
+            </div>
+            <div>
+                <h3>Domain Classification</h3>
+                <p style="text-transform: capitalize; font-weight: bold; color: #667eea;">{{ fmea.domain }}</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Risk Assessment & Impact Section -->
+    <div class="card" style="border-top: 4px solid #f44336;">
+        <h2 style="color: #f44336;">📈 Risk Assessment & Impact</h2>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+            <!-- Primary Risk Drivers -->
+            <div style="background: #ffebee; padding: 1.5rem; border-radius: 8px; border-left: 5px solid #f44336;">
+                <h3 style="margin-top: 0; color: #c62828;">⚡ Primary Risk Driver</h3>
+                {% if key_findings and key_findings.critical %}
+                    <p style="margin: 0; color: #333; line-height: 1.6; font-size: 1.05rem;">{{ key_findings.critical }}</p>
+                {% else %}
+                    <p style="color: #666;">Risk assessment data pending.</p>
+                {% endif %}
+            </div>
+            
+            <!-- Effectiveness Summary -->
+            <div style="background: #e8f5e9; padding: 1.5rem; border-radius: 8px; border-left: 5px solid #4caf50;">
+                <h3 style="margin-top: 0; color: #1b5e20;">✓ Analysis Effectiveness</h3>
+                {% if fmea.effectiveness_summary %}
+                    <p style="margin: 0; color: #333; line-height: 1.6; font-size: 1.05rem;">{{ fmea.effectiveness_summary }}</p>
+                {% else %}
+                    <p style="color: #666;">Analysis insights pending.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Recommended Actions & Improvements Section -->
+    <div class="card" style="border-top: 4px solid #4caf50;">
+        <h2 style="color: #4caf50;">💡 Recommended Improvements</h2>
+        
+        {% if key_findings and key_findings.improvement %}
+            <div style="background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%); padding: 1.5rem; border-radius: 8px; border-left: 5px solid #4caf50;">
+                <h3 style="margin-top: 0; color: #1b5e20; margin-bottom: 0.75rem;">🎯 Primary Improvement Strategy</h3>
+                <p style="margin: 0; color: #333; line-height: 1.7; font-size: 1.05rem;">{{ key_findings.improvement }}</p>
+            </div>
+        {% endif %}
+        
+        {% if key_findings and key_findings.follow_up %}
+            <div style="background: #fce4ec; padding: 1.5rem; border-radius: 8px; border-left: 5px solid #e91e63; margin-top: 1rem;">
+                <h3 style="margin-top: 0; color: #880e4f; margin-bottom: 0.75rem;">📋 Follow-up & Verification Plan</h3>
+                <p style="margin: 0; color: #333; line-height: 1.7;">{{ key_findings.follow_up }}</p>
+            </div>
+        {% endif %}
+    </div>
+    
+    <!-- Lessons Learned Section -->
+    <div class="card" style="border-top: 4px solid #2196f3;">
+        <h2 style="color: #2196f3;">🏆 Lessons Learned & Best Practices</h2>
+        
+        {% if fmea.lessons_learned %}
+            <div style="background: linear-gradient(135deg, #e1f5fe 0%, #b3e5fc 100%); padding: 1.5rem; border-radius: 8px; border-left: 5px solid #2196f3;">
+                <p style="margin: 0; color: #01579b; line-height: 1.8; font-size: 1rem;">{{ fmea.lessons_learned }}</p>
+            </div>
+            <div style="background: #f9f9f9; padding: 1rem; border-radius: 4px; margin-top: 1rem; border-left: 3px solid #2196f3;">
+                <p style="margin: 0; color: #666; font-size: 0.9rem;">
+                    <strong>Application:</strong> These insights should be incorporated into design reviews and manufacturing processes for similar products.
+                </p>
+            </div>
+        {% else %}
+            <p style="color: #7f8c8d;">No lessons learned documented.</p>
+        {% endif %}
+    </div>
+    
+    <!-- Document Metadata Section -->
+    <div class="card" style="background: #f9f9f9; border-top: 4px solid #ccc;">
+        <h2 style="color: #666; margin-top: 0;">📝 Document Metadata</h2>
+        <table style="width: 100%; font-size: 0.95rem;">
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 0.75rem 0; width: 30%; color: #666;"><strong>Record ID:</strong></td>
+                <td style="padding: 0.75rem 0;">{{ fmea.id }}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 0.75rem 0; color: #666;"><strong>Product Name:</strong></td>
+                <td style="padding: 0.75rem 0;">{{ fmea.product_name or 'N/A' }}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 0.75rem 0; color: #666;"><strong>Domain:</strong></td>
+                <td style="padding: 0.75rem 0; text-transform: capitalize;">{{ fmea.domain }}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 0.75rem 0; color: #666;"><strong>Created Date:</strong></td>
+                <td style="padding: 0.75rem 0;">{{ fmea.created_at or 'Unknown' }}</td>
+            </tr>
+        </table>
+    </div>
+    
+    <!-- Action Buttons -->
+    <div class="card" style="background: #f0f0f0; display: flex; gap: 1rem; flex-wrap: wrap; justify-content: space-between; border-top: 4px solid #667eea;">
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+            <a href="/history" class="button" style="background: #2196f3; color: white; padding: 0.75rem 1.5rem; border-radius: 4px; text-decoration: none; border: none; cursor: pointer;">
+                ← Back to Records
+            </a>
+            <a href="/" class="button" style="background: #667eea; color: white; padding: 0.75rem 1.5rem; border-radius: 4px; text-decoration: none; border: none; cursor: pointer;">
+                Dashboard
+            </a>
+        </div>
+    </div>
+</div>
+
+<style>
+    .card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 8px;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    
+    .button {
+        display: inline-block;
+        padding: 0.75rem 1.5rem;
+        background: #667eea;
+        color: white;
+        border-radius: 4px;
+        text-decoration: none;
+        border: none;
+        cursor: pointer;
+        transition: background 0.3s;
+        font-weight: 500;
+    }
+    
+    .button:hover {
+        background: #5568d3;
+        text-decoration: none;
+    }
+    
+    .two-column {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2rem;
+        margin-top: 1rem;
+    }
+    
+    .two-column h3 {
+        color: #2c3e50;
+        margin-top: 0;
+        margin-bottom: 0.5rem;
+    }
+    
+    .two-column p {
+        color: #555;
+        margin: 0;
+    }
+    
+    table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    
+    @media (max-width: 768px) {
+        .card {
+            padding: 1rem;
+        }
+        
+        h1 {
+            font-size: 1.8rem !important;
+        }
+        
+        .two-column {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 6: Optimization - {{ fmea.project_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Phase 6: Optimization</h1>
+        <p>{{ fmea.project_name }} - Plan and track mitigation actions</p>
+    </div>
+    
+    <div class="alert alert-info">
+        <strong>✅ Optimization</strong> involves developing, implementing, and verifying preventive and corrective actions to reduce identified risks below acceptable levels.
+    </div>
+    
+    <!-- Quick Stats -->
+    <div class="grid">
+        <div class="stat-card">
+            <div class="stat-label">Actions Assigned</div>
+            <div class="stat-value">{{ actions | length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">High Priority</div>
+            <div class="stat-value" style="color: #e74c3c;">{{ high_priority_count }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">On Track</div>
+            <div class="stat-value" style="color: #27ae60;">{{ completed_actions | default('0', true) }}</div>
+        </div>
+    </div>
+    
+    <!-- Add Mitigation Action -->
+    <div class="card">
+        <h2>Add Mitigation Action</h2>
+        <form method="post" action="/fmea/{{ fmea.id }}/add-action">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="form-group">
+                    <label>Action Description *</label>
+                    <textarea name="action_description" placeholder="What action will reduce risk?" required style="grid-column: 1/3;"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Action Type</label>
+                    <select name="action_type">
+                        <option value="prevention">Prevention</option>
+                        <option value="detection">Detection</option>
+                        <option value="design">Design Change</option>
+                        <option value="control">Process Control</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Responsible Person</label>
+                    <input type="text" name="responsibility" placeholder="Owner name">
+                </div>
+                
+                <div class="form-group">
+                    <label>Target Date</label>
+                    <input type="date" name="target_date">
+                </div>
+            </div>
+            
+            <input type="hidden" name="fmea_id" value="{{ fmea.id }}">
+            <input type="hidden" name="failure_cause_id" id="failureCauseId" value="">
+            
+            <button type="submit" class="button button-success">Add Action</button>
+        </form>
+    </div>
+    
+    <!-- Actions List -->
+    <div class="card">
+        <h2>Mitigation Actions ({{ actions | length }})</h2>
+        {% if actions %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Action</th>
+                        <th>Type</th>
+                        <th>Owner</th>
+                        <th>Target Date</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for action in actions %}
+                    <tr>
+                        <td>{{ action.action_description[:60] }}...</td>
+                        <td><span class="badge badge-info">{{ action.action_type or 'Unknown' }}</span></td>
+                        <td>{{ action.responsibility or 'Unassigned' }}</td>
+                        <td>{{ action.target_date or 'N/A' }}</td>
+                        <td>
+                            {% if action.status == 'completed' %}
+                                <span class="badge badge-success">✓ Done</span>
+                            {% else %}
+                                <span class="badge badge-warning">In Progress</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button onclick="showRescoreForm({{ action.id }})" class="button" style="padding: 0.25rem 0.75rem; font-size: 0.85rem;">Re-score</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p style="color: #7f8c8d; padding: 2rem; text-align: center;">No mitigation actions added yet.</p>
+        {% endif %}
+    </div>
+    
+    <div class="card">
+        <div style="display: flex; gap: 1rem;">
+            <a href="/fmea/{{ fmea.id }}/phase/risk" class="button button-secondary">← Previous</a>
+            <a href="/fmea/{{ fmea.id }}/phase/documentation" class="button button-success">Next Phase →</a>
+        </div>
+    </div>
+</div>
+
+<!-- Re-score Modal -->
+<div id="rescoreModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div class="card" style="width: 90%; max-width: 600px;">
+        <h2>Post-Action Risk Re-scoring</h2>
+        <form method="post" action="/fmea/{{ fmea.id }}/re-score-risk">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
+                <div class="form-group">
+                    <label>New Severity</label>
+                    <input type="number" name="new_severity" min="1" max="10" placeholder="1-10">
+                </div>
+                <div class="form-group">
+                    <label>New Occurrence</label>
+                    <input type="number" name="new_occurrence" min="1" max="10" placeholder="1-10">
+                </div>
+                <div class="form-group">
+                    <label>New Detection</label>
+                    <input type="number" name="new_detection" min="1" max="10" placeholder="1-10">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>Effectiveness Rating (1-5)</label>
+                <select name="effectiveness_rating">
+                    <option value="5">Highly Effective - Risk significantly reduced</option>
+                    <option value="4">Effective - Risk well controlled</option>
+                    <option value="3">Moderately Effective - Some improvement</option>
+                    <option value="2">Ineffective - Little improvement</option>
+                    <option value="1">Not Effective - No improvement</option>
+                </select>
+            </div>
+            
+            <input type="hidden" name="mitigation_action_id" id="actionId" value="">
+            <input type="hidden" name="failure_cause_id" id="causeId" value="">
+            <input type="hidden" name="fmea_id" value="{{ fmea.id }}">
+            
+            <div style="display: flex; gap: 1rem;">
+                <button type="submit" class="button button-success">Record Re-score</button>
+                <button type="button" onclick="closeRescoreForm()" class="button button-secondary">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showRescoreForm(actionId) {
+    document.getElementById('actionId').value = actionId;
+    document.getElementById('rescoreModal').style.display = 'flex';
+}
+
+function closeRescoreForm() {
+    document.getElementById('rescoreModal').style.display = 'none';
+}
+</script>
+{% endblock %}

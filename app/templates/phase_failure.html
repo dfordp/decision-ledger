@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 4: Failure Analysis - {{ fmea.project_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Phase 4: Failure Analysis</h1>
+        <p>{{ fmea.project_name }} - Identify failure modes and causes</p>
+    </div>
+    
+    <div class="alert alert-info">
+        <strong>❌ Failure Analysis</strong> identifies what could fail and why. Failure modes describe potential malfunctions; causes explain why they occur.
+    </div>
+    
+    <!-- Add New Failure Mode -->
+    <div class="card">
+        <h2>Add Failure Mode</h2>
+        <form method="post" action="/fmea/{{ fmea.id }}/add-failure-mode">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="form-group">
+                    <label>Mode Type</label>
+                    <select name="mode_type" required>
+                        <option value="omission">Omission (fails to occur)</option>
+                        <option value="commission">Commission (occurs when shouldn't)</option>
+                        <option value="degradation">Degradation (reduced performance)</option>
+                        <option value="intermittent">Intermittent (unpredictable behavior)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Severity (1-10)</label>
+                    <input type="number" name="severity_score" min="1" max="10" value="5" required>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>Failure Mode Description *</label>
+                <textarea name="description" placeholder="Describe what the failure looks like..." required></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>Potential Effects</label>
+                <textarea name="potential_effects" placeholder="How would this failure affect the system or customer?"></textarea>
+            </div>
+            
+            <div style="display: flex; gap: 1rem;">
+                <button type="submit" class="button button-success">Add Failure Mode</button>
+                <input type="hidden" name="fmea_id" value="{{ fmea.id }}">
+                <input type="hidden" name="product_system_id" value="{{ product_system.id }}">
+            </div>
+        </form>
+    </div>
+    
+    <!-- Current Failure Modes -->
+    <div class="card">
+        <h2>Failure Modes ({{ failure_modes | length }})</h2>
+        {% if failure_modes %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Mode</th>
+                        <th>Type</th>
+                        <th>Effects</th>
+                        <th>Causes</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for mode in failure_modes %}
+                    <tr>
+                        <td><strong>{{ mode.description }}</strong></td>
+                        <td><span class="badge badge-info">{{ mode.mode_type }}</span></td>
+                        <td>{{ mode.potential_effects[:50] }}...</td>
+                        <td>
+                            <a href="#" onclick="showAddCauseForm({{ mode.id }})" class="button" style="padding: 0.25rem 0.75rem; font-size: 0.85rem;">+ Add Cause</a>
+                        </td>
+                        <td>
+                            <a href="/fmea/{{ fmea.id }}/ishikawa/{{ mode.id }}" class="button" style="padding: 0.25rem 0.75rem; font-size: 0.85rem;">Ishikawa</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p style="color: #7f8c8d; padding: 2rem; text-align: center;">No failure modes added yet.</p>
+        {% endif %}
+    </div>
+    
+    <!-- AI Suggestions -->
+    {% if suggested_modes %}
+    <div class="card">
+        <h2>AI-Suggested Failure Modes</h2>
+        <p style="color: #7f8c8d; margin-bottom: 1rem;">Based on similar systems and historical FMEAs</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Mode</th>
+                    <th>Similarity</th>
+                    <th>Source System</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for suggestion in suggested_modes[:5] %}
+                <tr>
+                    <td>{{ suggestion.description }}</td>
+                    <td>{{ "%.1f" | format(suggestion.similarity_score * 100) }}%</td>
+                    <td>{{ suggestion.source_system or 'Historical' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    
+    <div class="card">
+        <div style="display: flex; gap: 1rem;">
+            <a href="/fmea/{{ fmea.id }}/phase/functional" class="button button-secondary">← Previous</a>
+            <a href="/fmea/{{ fmea.id }}/phase/risk" class="button button-success">Next Phase →</a>
+        </div>
+    </div>
+</div>
+
+<!-- Hidden Add Cause Form -->
+<div id="addCauseModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div class="card" style="width: 90%; max-width: 500px;">
+        <h2>Add Failure Cause</h2>
+        <form id="causeForm" method="post" action="/fmea/{{ fmea.id }}/add-cause">
+            <div class="form-group">
+                <label>Cause Description *</label>
+                <textarea name="cause_description" required placeholder="Why could this mode occur?"></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>Ishikawa Category</label>
+                <select name="ishikawa_category">
+                    <option value="">None</option>
+                    <option value="material">Material</option>
+                    <option value="method">Method</option>
+                    <option value="machine">Machine</option>
+                    <option value="measurement">Measurement</option>
+                    <option value="people">People</option>
+                    <option value="environment">Environment</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Occurrence (1-10)</label>
+                <input type="number" name="occurrence_score" min="1" max="10" value="5" required>
+            </div>
+            
+            <input type="hidden" id="failureMode" name="failure_mode_id" required>
+            
+            <div style="display: flex; gap: 1rem;">
+                <button type="submit" class="button button-success">Add Cause</button>
+                <button type="button" onclick="closeCauseForm()" class="button button-secondary">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showAddCauseForm(modeId) {
+    document.getElementById('failureMode').value = modeId;
+    document.getElementById('addCauseModal').style.display = 'flex';
+}
+
+function closeCauseForm() {
+    document.getElementById('addCauseModal').style.display = 'none';
+}
+</script>
+{% endblock %}

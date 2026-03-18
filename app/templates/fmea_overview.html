@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}{{ fmea.project_name }} - FMEA Overview{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>{{ fmea.project_name }}</h1>
+        <p>{{ fmea.description or 'FMEA Project Overview' }}</p>
+    </div>
+    
+    <!-- Project Stats -->
+    <div class="grid">
+        <div class="stat-card">
+            <div class="stat-label">System Function</div>
+            <div style="font-size: 1.1rem; color: #2c3e50; margin-top: 0.5rem;">{{ product_system.system_function }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Failure Modes</div>
+            <div class="stat-value">{{ total_modes }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Failure Causes</div>
+            <div class="stat-value">{{ total_causes }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Mitigation Actions</div>
+            <div class="stat-value">{{ total_actions }} / {{ completed_actions }} ✓</div>
+        </div>
+    </div>
+    
+    <!-- Phase Navigation -->
+    <div class="card">
+        <h2>FMEA Phases</h2>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
+            <a href="/fmea/{{ fmea.id }}/phase/planning" class="button" style="text-align: center; padding: 1rem;">
+                📋 Phase 1<br><small>Planning</small>
+            </a>
+            <a href="/fmea/{{ fmea.id }}/phase/structural" class="button" style="text-align: center; padding: 1rem;">
+                🏗️ Phase 2<br><small>Structural</small>
+            </a>
+            <a href="/fmea/{{ fmea.id }}/phase/functional" class="button" style="text-align: center; padding: 1rem;">
+                ⚙️ Phase 3<br><small>Functional</small>
+            </a>
+            <a href="/fmea/{{ fmea.id }}/phase/failure" class="button" style="text-align: center; padding: 1rem;">
+                ❌ Phase 4<br><small>Failure Analysis</small>
+            </a>
+            <a href="/fmea/{{ fmea.id }}/phase/risk" class="button" style="text-align: center; padding: 1rem;">
+                ⚠️ Phase 5<br><small>Risk Analysis</small>
+            </a>
+            <a href="/fmea/{{ fmea.id }}/phase/optimization" class="button" style="text-align: center; padding: 1rem;">
+                ✅ Phase 6<br><small>Optimization</small>
+            </a>
+            <a href="/fmea/{{ fmea.id }}/phase/documentation" class="button" style="text-align: center; padding: 1rem;">
+                📄 Phase 7<br><small>Documentation</small>
+            </a>
+        </div>
+    </div>
+    
+    <!-- Current Status -->
+    <div class="card">
+        <h2>Current Status: {{ fmea.current_phase or 'Planning' }}</h2>
+        <p style="color: #7f8c8d; margin-bottom: 1rem;">
+            Started {{ fmea.created_at or 'recently' }} | Status: 
+            {% if fmea.status == 'completed' %}
+                <span class="badge badge-success">Completed</span>
+            {% elif fmea.status == 'in_progress' %}
+                <span class="badge badge-warning">In Progress</span>
+            {% else %}
+                <span class="badge badge-info">{{ fmea.status }}</span>
+            {% endif %}
+        </p>
+    </div>
+    
+    <!-- Quick Actions -->
+    <div class="card">
+        <h2>Quick Actions</h2>
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+            {% if fmea.current_phase == 'failure' or fmea.current_phase == 'risk' or fmea.current_phase == 'optimization' %}
+                <a href="/fmea/{{ fmea.id }}/risk-matrix" class="button">📊 View Risk Matrix</a>
+            {% endif %}
+            {% if total_modes > 0 %}
+                <a href="/fmea/{{ fmea.id }}/report" class="button">📄 Generate Report</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

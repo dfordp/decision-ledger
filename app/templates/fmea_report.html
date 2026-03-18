@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}FMEA Report - {{ fmea.project_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    @media print {
+        .navbar, .print-hidden { display: none !important; }
+        body { background: white; }
+        .card { page-break-inside: avoid; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>FMEA Analysis Report</h1>
+        <p>{{ fmea.project_name }} | {{ product_system.system_function }}</p>
+    </div>
+    
+    <!-- Print Controls -->
+    <div class="card print-hidden" style="display: flex; gap: 1rem; justify-content: flex-end;">
+        <button onclick="window.print()" class="button">🖨️ Print</button>
+        <button onclick="downloadPDF()" class="button">📥 Export PDF</button>
+    </div>
+    
+    <!-- Report Header -->
+    <div class="card">
+        <h2>Executive Summary</h2>
+        <table style="width: 100%; margin-top: 1rem;">
+            <tr>
+                <td style="width: 50%;"><strong>Project:</strong> {{ fmea.project_name }}</td>
+                <td style="width: 50%;"><strong>Status:</strong> {{ fmea.status | upper }}</td>
+            </tr>
+            <tr>
+                <td><strong>System:</strong> {{ product_system.system_function }}</td>
+                <td><strong>Domain:</strong> {{ product_system.domain }}</td>
+            </tr>
+            <tr>
+                <td><strong>Date Prepared:</strong> {{ fmea.created_at or 'Current' }}</td>
+                <td><strong>Created By:</strong> {{ fmea.created_by or 'FMEA Team' }}</td>
+            </tr>
+            <tr>
+                <td colspan="2"><strong>Scope:</strong> {{ fmea.description or 'Comprehensive failure mode analysis' }}</td>
+            </tr>
+        </table>
+    </div>
+    
+    <!-- FMEA Table -->
+    <div class="card">
+        <h2>FMEA Worksheet</h2>
+        <table style="font-size: 0.9rem;">
+            <thead>
+                <tr style="background: #2c3e50; color: white;">
+                    <th>Item</th>
+                    <th>Function</th>
+                    <th>Failure Mode</th>
+                    <th>Failure Cause</th>
+                    <th>Current Controls</th>
+                    <th>S</th>
+                    <th>O</th>
+                    <th>D</th>
+                    <th>RPN</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in fmea_table %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ product_system.system_function[:20] }}</td>
+                    <td>{{ item.failure_mode.description[:30] }}</td>
+                    <td>{{ item.failure_cause.cause_description[:30] }}...</td>
+                    <td>
+                        {% if item.controls %}
+                            {{ item.controls[0].control_description[:20] }}...
+                        {% else %}
+                            None
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.risk_score %}
+                            <strong>{{ item.risk_score.severity }}</strong>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.risk_score %}
+                            <strong>{{ item.risk_score.occurrence }}</strong>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if item.risk_score %}
+                            <strong>{{ item.risk_score.detection }}</strong>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td style="font-weight: bold; color: {% if item.risk_score and item.risk_score.rpn > 100 %}#e74c3c{% else %}#27ae60{% endif %};">
+                        {% if item.risk_score %}
+                            {{ item.risk_score.rpn }}
+                        {% else %}
+                            N/A
+                        {% endif %}
+                    </td>
+                    <td>{{ item.actions | length }} action(s)</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- Statistics -->
+    <div class="grid">
+        <div class="stat-card">
+            <div class="stat-label">Total Failure Modes</div>
+            <div class="stat-value">{{ fmea_table | length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">High Risk (RPN > 100)</div>
+            <div class="stat-value" style="color: #e74c3c;">
+                {% set high_risk = fmea_table | selectattr('risk_score') | selectattr('risk_score.rpn', 'gt', 100) | list %}
+                {{ high_risk | length }}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Mitigation Actions</div>
+            <div class="stat-value">
+                {% set total_actions = fmea_table | map(attribute='actions') | map('length') | sum %}
+                {{ total_actions }}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Recommended Actions -->
+    <div class="card">
+        <h2>Recommended Actions</h2>
+        <p style="color: #7f8c8d; margin-bottom: 1rem;">Items requiring mitigation or further investigation:</p>
+        {% set has_actions = fmea_table | selectattr('actions') | selectattr('actions', 'length', '>', 0) | list %}
+        {% if has_actions %}
+            <ol style="color: #7f8c8d; line-height: 1.8;">
+                {% for item in has_actions[:10] %}
+                <li>
+                    <strong>{{ item.failure_mode.description }}</strong> caused by {{ item.failure_cause.cause_description }}
+                    - {{ item.actions | length }} action(s) assigned
+                </li>
+                {% endfor %}
+            </ol>
+        {% else %}
+            <p style="color: #95a5a6;">No specific actions required.</p>
+        {% endif %}
+    </div>
+    
+    <!-- Notes & Approval -->
+    <div class="card" style="page-break-before: always;">
+        <h2>Notes & Sign-off</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2rem; margin-top: 2rem;">
+            <div>
+                <p style="color: #7f8c8d; margin-bottom: 2rem;">FMEA Lead</p>
+                <p style="border-top: 1px solid #bdc3c7; padding-top: 1rem;">_______________</p>
+                <p style="color: #7f8c8d; font-size: 0.9rem;">Signature / Date</p>
+            </div>
+            <div>
+                <p style="color: #7f8c8d; margin-bottom: 2rem;">Quality Manager</p>
+                <p style="border-top: 1px solid #bdc3c7; padding-top: 1rem;">_______________</p>
+                <p style="color: #7f8c8d; font-size: 0.9rem;">Signature / Date</p>
+            </div>
+            <div>
+                <p style="color: #7f8c8d; margin-bottom: 2rem;">Engineering Lead</p>
+                <p style="border-top: 1px solid #bdc3c7; padding-top: 1rem;">_______________</p>
+                <p style="color: #7f8c8d; font-size: 0.9rem;">Signature / Date</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function downloadPDF() {
+    // Simple implementation - in production use html2pdf library
+    alert('PDF export requires html2pdf library integration');
+}
+</script>
+{% endblock %}

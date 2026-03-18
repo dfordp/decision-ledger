@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 2: Structural Analysis - {{ fmea.project_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Phase 2: Structural Analysis</h1>
+        <p>{{ fmea.project_name }} - Define and decompose system structure</p>
+    </div>
+    
+    <div class="alert alert-info">
+        <strong>📋 Structural Analysis</strong> involves breaking down the product/system into components, subsystems, and interfaces to understand how they interact.
+    </div>
+    
+    <div class="card">
+        <h2>System Structure</h2>
+        <p style="color: #7f8c8d; margin-bottom: 1rem;">
+            System: <strong>{{ product_system.system_function }}</strong><br>
+            Domain: <strong>{{ product_system.domain }}</strong>
+        </p>
+        
+        <div style="background: #f8f9fa; padding: 2rem; border-radius: 4px; text-align: center; min-height: 300px; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+            <p style="color: #7f8c8d; font-size: 1.1rem;">System Block Diagram</p>
+            <p style="color: #95a5a6; margin-top: 1rem;">Integration with design documentation tools coming soon...</p>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>Components & Subsystems</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Component Name</th>
+                    <th>Type</th>
+                    <th>Criticality</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td colspan="4" style="text-align: center; color: #7f8c8d; padding: 2rem;">
+                        Components to be defined based on design documentation
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="card">
+        <div style="display: flex; gap: 1rem;">
+            <a href="/fmea/{{ fmea.id }}" class="button button-secondary">Back</a>
+            <a href="/fmea/{{ fmea.id }}/phase/functional" class="button button-success">Next Phase →</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Create New FMEA{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Create New FMEA Project</h1>
+        <p>Start a new Failure Mode and Effects Analysis following AIAG-VDA 4.0 standard</p>
+    </div>
+    
+    <div class="card" style="max-width: 600px;">
+        <h2>Project Details</h2>
+        <form method="post" action="/fmea/create">
+            <div class="form-group">
+                <label for="product_system_id">Product System *</label>
+                <select id="product_system_id" name="product_system_id" required>
+                    <option value="">-- Select System --</option>
+                    {% for system in product_systems %}
+                        <option value="{{ system.id }}">{{ system.system_function }} ({{ system.domain }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="project_name">Project Name *</label>
+                <input type="text" id="project_name" name="project_name" required placeholder="e.g., Brake System FMEA">
+            </div>
+            
+            <div class="form-group">
+                <label for="description">Description</label>
+                <textarea id="description" name="description" placeholder="Describe the scope and objectives of this FMEA..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="created_by">Your Name</label>
+                <input type="text" id="created_by" name="created_by" value="admin" placeholder="FMEA Lead">
+            </div>
+            
+            <div style="display: flex; gap: 1rem;">
+                <button type="submit" class="button button-success">Create FMEA</button>
+                <a href="/" class="button button-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

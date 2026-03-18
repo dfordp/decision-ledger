@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 1: Planning - {{ fmea.project_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Phase 1: Planning</h1>
+        <p>{{ fmea.project_name }} - Define team composition and project scope</p>
+    </div>
+    
+    <div class="card">
+        <h2>Team Assignment</h2>
+        <p style="color: #7f8c8d; margin-bottom: 1rem;">Select core team members and supporting experts for this FMEA analysis.</p>
+        
+        <form method="post" action="/fmea/{{ fmea.id }}/assign-team">
+            <div class="form-group">
+                <label for="team_leads">Core Team Leads *</label>
+                <select id="team_leads" name="team_leads" size="5" multiple required>
+                    {% for expert in suggested_experts[:5] %}
+                        <option value="{{ expert.id }}">
+                            {{ expert.name }} - {{ expert.department }} ({{ expert.role }})
+                        </option>
+                    {% endfor %}
+                </select>
+                <small style="color: #7f8c8d;">Hold Ctrl to select multiple team leads</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="team_members">Team Members</label>
+                <select id="team_members" name="team_members" size="5" multiple>
+                    {% for expert in all_experts %}
+                        <option value="{{ expert.id }}">
+                            {{ expert.name }} - {{ expert.department }} ({{ expert.role }})
+                        </option>
+                    {% endfor %}
+                </select>
+                <small style="color: #7f8c8d;">Hold Ctrl to select multiple members</small>
+            </div>
+            
+            <button type="submit" class="button button-success">Assign Team & Proceed</button>
+        </form>
+    </div>
+    
+    <!-- Suggested Experts -->
+    <div class="card">
+        <h2>Suggested Team Members</h2>
+        <p style="color: #7f8c8d; margin-bottom: 1rem;">AI-recommended experts for domain: <strong>{{ product_system.domain }}</strong></p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Role</th>
+                    <th>Department</th>
+                    <th>Skills</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for expert in suggested_experts %}
+                <tr>
+                    <td><strong>{{ expert.name }}</strong></td>
+                    <td>{{ expert.role }}</td>
+                    <td>{{ expert.department }}</td>
+                    <td>
+                        {% if expert.skills %}
+                            {{ expert.skills[:2] | join(', ') }}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- Project Scope -->
+    <div class="card">
+        <h2>Project Scope</h2>
+        <div style="background: #f8f9fa; padding: 1rem; border-radius: 4px;">
+            <p><strong>System:</strong> {{ product_system.system_function }}</p>
+            <p><strong>Domain:</strong> {{ product_system.domain }}</p>
+            <p><strong>Scope:</strong> {{ product_system.scope or 'Comprehensive analysis of failure modes' }}</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

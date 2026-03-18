@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}FMEA Dashboard{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>FMEA Dashboard</h1>
+        <p>Manage and track all Failure Mode and Effects Analysis projects</p>
+    </div>
+    
+    <!-- Statistics -->
+    <div class="grid">
+        <div class="stat-card">
+            <div class="stat-label">Total FMEAs</div>
+            <div class="stat-value">{{ total_fmeas }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">In Progress</div>
+            <div class="stat-value">{{ in_progress }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Completed</div>
+            <div class="stat-value">{{ completed }}</div>
+        </div>
+    </div>
+    
+    <!-- New FMEA Button -->
+    <div class="card">
+        <a href="/fmea/new" class="button button-success">+ Create New FMEA</a>
+    </div>
+    
+    <!-- FMEA Projects List -->
+    <div class="card">
+        <h2>FMEA Projects</h2>
+        {% if fmea_records %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Project Name</th>
+                        <th>System</th>
+                        <th>Current Phase</th>
+                        <th>Status</th>
+                        <th>Created By</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for fmea in fmea_records %}
+                    <tr>
+                        <td><strong>{{ fmea.project_name }}</strong></td>
+                        <td>{{ fmea.product_system_id }}</td>
+                        <td>{{ fmea.current_phase or 'Planning' }}</td>
+                        <td>
+                            {% if fmea.status == 'completed' %}
+                                <span class="badge badge-success">Completed</span>
+                            {% elif fmea.status == 'in_progress' %}
+                                <span class="badge badge-warning">In Progress</span>
+                            {% else %}
+                                <span class="badge badge-info">{{ fmea.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ fmea.created_by or 'admin' }}</td>
+                        <td>
+                            <a href="/fmea/{{ fmea.id }}" class="button" style="padding: 0.5rem 1rem; font-size: 0.9rem;">View</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p style="color: #7f8c8d; padding: 2rem; text-align: center;">No FMEA projects yet. <a href="/fmea/new">Create one now</a></p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

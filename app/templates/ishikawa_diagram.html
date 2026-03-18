@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Ishikawa Diagram - {{ failure_mode.description }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Ishikawa (Fishbone) Diagram</h1>
+        <p>Root cause analysis for: <strong>{{ failure_mode.description }}</strong></p>
+    </div>
+    
+    <div class="card">
+        <h2>Cause Categories</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 2rem;">
+            {% for category in ['Material', 'Method', 'Machine', 'Measurement', 'People', 'Environment'] %}
+            <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 4px; border-left: 4px solid #3498db;">
+                <h3 style="color: #2c3e50; margin-bottom: 1rem;">{{ category }}</h3>
+                {% if ishikawa_data.get(category | lower) %}
+                    <ul style="list-style-position: inside; color: #7f8c8d;">
+                        {% for cause in ishikawa_data[category | lower] %}
+                        <li style="margin-bottom: 0.5rem;">{{ cause.cause_description }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p style="color: #95a5a6; font-style: italic;">No causes in this category yet</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>Ascii Fishbone Diagram</h2>
+        <pre style="background: #f8f9fa; padding: 1.5rem; border-radius: 4px; overflow-x: auto; font-size: 0.9rem; color: #2c3e50;">
+            Material    Method      Machine     Measurement    People    Environment
+                ╲        ╲            ╲            ╲            ╱         ╱
+                 ╲        ╲            ╲            ╲           ╱         ╱
+                  ╲────────╲────────────╲───────────╱──────────╱─────────╱
+                                                    ├─→ {{ failure_mode.description }}
+                  ╱────────╱────────────╱───────────╲──────────╲─────────╲
+                 ╱        ╱            ╱            ╱           ╲         ╲
+                ╱        ╱            ╱            ╱             ╲         ╲
+        </pre>
+    </div>
+    
+    <div class="card">
+        <div style="display: flex; gap: 1rem;">
+            <a href="/fmea/{{ fmea_id }}/phase/failure" class="button button-secondary">← Back to Failure Analysis</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

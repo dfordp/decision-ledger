@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 3: Functional Analysis - {{ fmea.project_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Phase 3: Functional Analysis</h1>
+        <p>{{ fmea.project_name }} - Extract and review system functions</p>
+    </div>
+    
+    <div class="alert alert-info">
+        <strong>📋 Functional Analysis</strong> identifies what the system/component is supposed to do and how it's intended to perform. Functions form the basis for failure identification.
+    </div>
+    
+    <div class="card">
+        <h2>Upload Technical Documentation</h2>
+        <p style="color: #7f8c8d; margin-bottom: 1rem;">Extract functions from design documents, requirements, or specifications.</p>
+        
+        <form id="uploadForm" enctype="multipart/form-data" style="display: flex; gap: 1rem; margin-bottom: 1.5rem;">
+            <input type="file" id="documentFile" accept=".pdf,.xlsx,.xls,.docx,.txt" style="flex: 1; padding: 0.75rem; border: 1px dashed #3498db; border-radius: 4px; cursor: pointer;">
+            <button type="button" onclick="uploadDocument()" class="button button-success">Extract Functions</button>
+        </form>
+        
+        <div id="extractedText" style="background: #f8f9fa; padding: 1rem; border-radius: 4px; display: none;">
+            <h3 style="margin-bottom: 0.5rem;">Extracted Content</h3>
+            <pre id="textContent" style="white-space: pre-wrap; color: #7f8c8d;"></pre>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>System Functions</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Function</th>
+                    <th>Description</th>
+                    <th>Intent</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td colspan="4" style="text-align: center; color: #7f8c8d; padding: 2rem;">
+                        Functions extracted from documents will appear here
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="card">
+        <div style="display: flex; gap: 1rem;">
+            <a href="/fmea/{{ fmea.id }}/phase/structural" class="button button-secondary">← Previous</a>
+            <a href="/fmea/{{ fmea.id }}/phase/failure" class="button button-success">Next Phase →</a>
+        </div>
+    </div>
+</div>
+
+<script>
+function uploadDocument() {
+    const fileInput = document.getElementById('documentFile');
+    const file = fileInput.files[0];
+    
+    if (!file) {
+        alert('Please select a file');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    fetch('/fmea/{{ fmea.id }}/upload-document', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            document.getElementById('textContent').textContent = data.text;
+            document.getElementById('extractedText').style.display = 'block';
+        } else {
+            alert('Error: ' + data.error);
+        }
+    })
+    .catch(e => alert('Upload failed: ' + e));
+}
+</script>
+{% endblock %}

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Phase 7: Documentation - {{ fmea.project_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Phase 7: Documentation & Closure</h1>
+        <p>{{ fmea.project_name }} - Final review, lessons learned, and knowledge capture</p>
+    </div>
+    
+    <div class="alert alert-info">
+        <strong>📄 Documentation</strong> ensures FMEA results are captured for traceability, establishes baseline for ongoing monitoring, and preserves lessons learned for future projects.
+    </div>
+    
+    <!-- Final Statistics -->
+    <div class="grid">
+        <div class="stat-card">
+            <div class="stat-label">Total Failure Modes</div>
+            <div class="stat-value">{{ total_modes }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">High Priority Items</div>
+            <div class="stat-value" style="color: #e74c3c;">{{ high_priority_count }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Mitigation Actions</div>
+            <div class="stat-value">{{ total_actions }}</div>
+        </div>
+    </div>
+    
+    <!-- Lessons Learned -->
+    {% if lessons_learned %}
+    <div class="card">
+        <h2>Key Lessons Learned</h2>
+        <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 4px; border-left: 4px solid #3498db;">
+            {{ lessons_learned }}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Closure Checklist -->
+    <div class="card">
+        <h2>FMEA Closure Checklist</h2>
+        <div style="display: grid; gap: 1rem;">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <input type="checkbox" id="check1" checked>
+                <label for="check1" style="margin: 0;">✓ All failure modes identified and documented</label>
+            </div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <input type="checkbox" id="check2" checked>
+                <label for="check2" style="margin: 0;">✓ Risk scores (S/O/D) assigned to all causes</label>
+            </div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <input type="checkbox" id="check3" checked>
+                <label for="check3" style="margin: 0;">✓ High-priority items (RPN &gt; 100) mitigated or acceptable</label>
+            </div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <input type="checkbox" id="check4" checked>
+                <label for="check4" style="margin: 0;">✓ Actions assigned with responsible parties and target dates</label>
+            </div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <input type="checkbox" id="check5" checked>
+                <label for="check5" style="margin: 0;">✓ Team reviewed and approved FMEA documentation</label>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Documentation Links -->
+    <div class="card">
+        <h2>Documentation & Reports</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <a href="/fmea/{{ fmea.id }}/report" class="button" style="text-align: center; padding: 1rem;">
+                📊 View Full Report
+            </a>
+            <a href="#" class="button" style="text-align: center; padding: 1rem;">
+                📥 Export to Excel
+            </a>
+        </div>
+    </div>
+    
+    <!-- Close FMEA -->
+    <div class="card">
+        <h2>Complete FMEA</h2>
+        <form method="post" action="/fmea/{{ fmea.id }}/close">
+            <div class="alert alert-warning">
+                <strong>⚠️ Note:</strong> Completing this FMEA will set status to 'Completed'. You can still view and reference the analysis afterward.
+            </div>
+            
+            <div style="display: flex; gap: 1rem;">
+                <button type="submit" name="action" value="close" class="button button-success">✓ Mark FMEA Complete</button>
+                <a href="/fmea/{{ fmea.id }}" class="button button-secondary">Back to Overview</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

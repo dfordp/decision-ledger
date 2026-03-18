@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Historical FMEAs{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Historical FMEAs</h1>
+        <p>Browse completed analyses for knowledge reuse and lessons learned</p>
+    </div>
+    
+    <div class="card">
+        <h2>Past FMEA Projects ({{ historical_fmeas | length }})</h2>
+        
+        {% if historical_fmeas %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Product / System</th>
+                        <th>Domain</th>
+                        <th>Analysis Date</th>
+                        <th>Key Failures</th>
+                        <th>Lessons Learned</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for fmea in historical_fmeas %}
+                    <tr>
+                        <td><strong>{{ fmea.product_name or 'System Analysis' }}</strong></td>
+                        <td>{{ fmea.domain }}</td>
+                        <td>{{ fmea.created_at or 'Recent' }}</td>
+                        <td>{{ fmea.key_failures or '-' }}</td>
+                        <td style="font-size: 0.9rem; color: #7f8c8d;">
+                            {% if fmea.lessons_learned %}
+                                {{ fmea.lessons_learned[:50] }}...
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td><a href="/history/{{ fmea.id }}" class="button button-small">View Report</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p style="color: #7f8c8d; padding: 2rem; text-align: center;">No historical FMEAs available yet.</p>
+        {% endif %}
+    </div>
+    
+    <div class="card">
+        <a href="/" class="button button-secondary">Back to Dashboard</a>
+    </div>
+</div>
+{% endblock %}

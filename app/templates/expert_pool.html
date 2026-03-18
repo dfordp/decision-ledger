@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Expert Pool{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Expert Pool</h1>
+        <p>Browse and manage organization's FMEA expertise</p>
+    </div>
+    
+    <div class="card">
+        <h2>Available Experts ({{ experts | length }})</h2>
+        
+        {% if experts %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Department</th>
+                        <th>Role</th>
+                        <th>Skills</th>
+                        <th>Years Exp.</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for expert in experts %}
+                    <tr>
+                        <td><strong>{{ expert.name }}</strong></td>
+                        <td>{{ expert.department }}</td>
+                        <td>{{ expert.role }}</td>
+                        <td>
+                            {% if expert.skills %}
+                                {{ expert.skills[:3] | join(', ') }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td>{{ expert.years_experience or '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p style="color: #7f8c8d; padding: 2rem; text-align: center;">No experts in the pool yet.</p>
+        {% endif %}
+    </div>
+    
+    <div class="card">
+        <a href="/" class="button button-secondary">Back to Dashboard</a>
+    </div>
+</div>
+{% endblock %}
