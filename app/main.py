@@ -7,6 +7,7 @@ All decisions stored in memory (no database persistence for POC).
 from datetime import datetime
 import os
 import re
+import tempfile
 
 from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -16,7 +17,7 @@ from decimal import Decimal
 from typing import Optional
 from fastapi.responses import StreamingResponse
 
-from app.database import fetch_all, fetch_one
+from app.database import fetch_all, fetch_one, execute_query, insert_and_return_id
 from app.reasoning import reason_about_requirement
 from app.models import DecisionUpdate, ReasoningResult
 from app.document_ingestion import (
@@ -1679,6 +1680,564 @@ async def get_field_options_from_history(
             status_code=500,
             content={"error": str(e)}
         )
+
+
+# ============================================================================
+# PFMEA CANVAS ROUTES (NEW)
+# ============================================================================
+
+@app.get("/pfmea/select", response_class=HTMLResponse)
+async def pfmea_select_part(request: Request):
+    """Part selection page - list available parts or create new"""
+    parts = fetch_all("""
+        SELECT 
+            pr.id, 
+            pr.part_name, 
+            pr.part_number, 
+            pr.model_year,
+            COUNT(pfe.id) as failure_mode_count
+        FROM pfmea_records pr
+        LEFT JOIN pfmea_failure_mode_entries pfe ON pr.id = pfe.pfmea_record_id
+        GROUP BY pr.id
+        ORDER BY pr.created_at DESC
+    """)
+    
+    return templates.TemplateResponse("pfmea_select.html", {
+        "request": request,
+        "parts": parts
+    })
+
+
+@app.get("/pfmea/{part_id}/canvas", response_class=HTMLResponse)
+async def pfmea_canvas(request: Request, part_id: int):
+    """FMEA Canvas - Main editing interface"""
+    part = fetch_one("SELECT * FROM pfmea_records WHERE id = %s", (part_id,))
+    
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    
+    entries = fetch_all("""
+        SELECT 
+            pfe.*,
+            fm.canonical_name as failure_mode_name,
+            fm.category,
+            ps.step_name as process_step_name
+        FROM pfmea_failure_mode_entries pfe
+        JOIN failure_mode_taxonomy fm ON pfe.failure_mode_id = fm.id
+        LEFT JOIN process_steps ps ON pfe.process_step_id = ps.id
+        WHERE pfe.pfmea_record_id = %s
+        ORDER BY pfe.process_step_number
+    """, (part_id,))
+    
+    return templates.TemplateResponse("pfmea_canvas.html", {
+        "request": request,
+        "part": part,
+        "entries": entries,
+        "part_id": part_id
+    })
+
+
+@app.post("/api/pfmea/parts")
+async def create_pfmea_part(request: Request):
+    """Create new PFMEA part and auto-populate with relevant failure modes"""
+    from app.rpn_suggestion_engine import find_similar_parts, get_part_failures, find_relevant_failure_modes
+    
+    data = await request.json()
+    
+    # Find similar existing parts BEFORE creating this part
+    similar_parts = find_similar_parts(data['part_name'], limit=3)
+    
+    # Create part
+    part_id = insert_and_return_id("""
+        INSERT INTO pfmea_records 
+        (part_number, part_name, model_year, process_responsibility, status, format_number)
+        VALUES (%s, %s, %s, %s, 'DRAFT', %s)
+    """, (
+        data['part_number'],
+        data['part_name'],
+        data['model_year'],
+        "User",
+        f"AUTO/{data['part_number']}/{datetime.now().strftime('%Y%m%d')}"
+    ))
+    
+    # Try to clone from most similar part (with best match score)
+    cloned_from_part = None
+    
+    if similar_parts and similar_parts[0]['match_score'] > 0:
+        cloned_from_part = similar_parts[0]
+        source_part_id = cloned_from_part['id']
+        
+        # Clone process steps from similar part
+        source_steps = fetch_all("""
+            SELECT step_number, step_name, process_function
+            FROM process_steps WHERE pfmea_record_id = %s
+            ORDER BY step_number
+        """, (source_part_id,))
+        
+        step_id_map = {}
+        for step in source_steps:
+            step_id = insert_and_return_id("""
+                INSERT INTO process_steps (pfmea_record_id, step_number, step_name, process_function)
+                VALUES (%s, %s, %s, %s)
+            """, (part_id, step['step_number'], step['step_name'], step['process_function']))
+            step_id_map[step['step_number']] = step_id
+        
+        # Clone failure modes from similar part
+        source_failures = get_part_failures(source_part_id)
+        modes_added = 0
+        
+        for failure in source_failures:
+            step_id = step_id_map.get(failure['process_step_number'])
+            if not step_id:
+                # Default to first step if mapping fails
+                first_step = fetch_one("""
+                    SELECT id FROM process_steps WHERE pfmea_record_id = %s
+                    ORDER BY step_number LIMIT 1
+                """, (part_id,))
+                if first_step:
+                    step_id = first_step['id']
+                else:
+                    continue
+            
+            insert_and_return_id("""
+                INSERT INTO pfmea_failure_mode_entries
+                (pfmea_record_id, process_step_id, process_step_number, failure_mode_id,
+                 potential_effect, severity_user_input, occurrence_user_input, detection_user_input)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                part_id, step_id, failure['process_step_number'], failure['failure_mode_id'],
+                f"Potential: {failure['failure_mode_name']}",
+                failure['severity'] or 5,
+                failure['occurrence'] or 2,
+                failure['detection'] or 2
+            ))
+            modes_added += 1
+    else:
+        # Fallback: Create default process steps and auto-populate with pgvector search
+        default_steps = [
+            {"step_number": 10, "step_name": "Step 1", "process_function": "Manufacturing Step 1"},
+            {"step_number": 20, "step_name": "Step 2", "process_function": "Manufacturing Step 2"},
+            {"step_number": 30, "step_name": "Step 3", "process_function": "Manufacturing Step 3"},
+        ]
+        
+        step_id_map = {}
+        for step in default_steps:
+            step_id = insert_and_return_id("""
+                INSERT INTO process_steps (pfmea_record_id, step_number, step_name, process_function)
+                VALUES (%s, %s, %s, %s)
+            """, (part_id, step['step_number'], step['step_name'], step['process_function']))
+            step_id_map[step['step_number']] = step_id
+        
+        # Find relevant failure modes using pgvector semantic search
+        relevant_modes = find_relevant_failure_modes(
+            data['part_name'], 
+            data['part_number'], 
+            limit=5
+        )
+        
+        modes_added = 0
+        for idx, mode in enumerate(relevant_modes[:5]):
+            step_number = default_steps[idx % len(default_steps)]['step_number']
+            step_id = step_id_map[step_number]
+            fm_id = mode['id']
+            
+            insert_and_return_id("""
+                INSERT INTO pfmea_failure_mode_entries
+                (pfmea_record_id, process_step_id, process_step_number, failure_mode_id,
+                 potential_effect, severity_user_input, occurrence_user_input, detection_user_input)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                part_id, step_id, step_number, fm_id,
+                f"Potential: {mode['canonical_name']}",
+                5, 2, 2
+            ))
+            modes_added += 1
+    
+    return JSONResponse({
+        "id": part_id,
+        "part_name": data['part_name'],
+        "part_number": data['part_number'],
+        "auto_populated_modes": modes_added,
+        "cloned_from": cloned_from_part['part_number'] if cloned_from_part else None,
+        "message": f"Part created with {modes_added} auto-populated failure modes" + 
+                  (f" (cloned from {cloned_from_part['part_number']})" if cloned_from_part else "")
+    })
+
+
+
+
+@app.get("/api/pfmea/parts/{part_id}")
+async def get_pfmea_part(part_id: int):
+    """Get PFMEA part details"""
+    part = fetch_one("SELECT * FROM pfmea_records WHERE id = %s", (part_id,))
+    
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    
+    return dict(part)
+
+
+@app.get("/api/pfmea/parts/{part_id}/steps")
+async def get_process_steps(part_id: int):
+    """Get process steps for a PFMEA record"""
+    steps = fetch_all("""
+        SELECT * FROM process_steps WHERE pfmea_record_id = %s
+        ORDER BY step_number
+    """, (part_id,))
+    
+    return [dict(s) for s in steps]
+
+
+@app.get("/api/pfmea/parts/{part_id}/entries")
+async def get_failure_mode_entries(part_id: int):
+    """Get all failure mode entries for a PFMEA record"""
+    from app.rpn_suggestion_engine import get_rpn_suggestions, classify_rpn_risk
+    
+    entries = fetch_all("""
+        SELECT 
+            pfe.*,
+            fm.canonical_name as failure_mode_name,
+            ps.step_name as process_step_name
+        FROM pfmea_failure_mode_entries pfe
+        JOIN failure_mode_taxonomy fm ON pfe.failure_mode_id = fm.id
+        LEFT JOIN process_steps ps ON pfe.process_step_id = ps.id
+        WHERE pfe.pfmea_record_id = %s
+        ORDER BY pfe.process_step_number
+    """, (part_id,))
+    
+    # Enrich with RPN suggestions
+    part = fetch_one("SELECT part_number FROM pfmea_records WHERE id = %s", (part_id,))
+    
+    result = []
+    for entry in entries:
+        entry_dict = dict(entry)
+        
+        # Get RPN suggestions from historical data
+        suggestions = get_rpn_suggestions(
+            failure_mode_id=entry['failure_mode_id'],
+            part_number=part['part_number']
+        )
+        
+        if suggestions:
+            entry_dict['severity_suggested'] = suggestions.get('severity_suggested')
+            entry_dict['occurrence_suggested'] = suggestions.get('occurrence_suggested')
+            entry_dict['detection_suggested'] = suggestions.get('detection_suggested')
+            entry_dict['rpn_suggested'] = suggestions.get('rpn_suggested')
+            entry_dict['similar_incidents_count'] = suggestions.get('similar_incident_count', 0)
+        
+        # Classify RPN risk
+        rpn = entry_dict.get('rpn_user_calculated') or entry_dict.get('rpn_suggested')
+        if rpn:
+            entry_dict['rpn_risk_class'] = classify_rpn_risk(rpn)
+        
+        result.append(entry_dict)
+    
+    return result
+
+
+@app.get("/api/pfmea/entries/{entry_id}/suggestions")
+async def get_rpn_suggestions_api(entry_id: int):
+    """Get suggested RPN scores from historical data"""
+    from app.rpn_suggestion_engine import get_rpn_suggestions
+    
+    entry = fetch_one("SELECT * FROM pfmea_failure_mode_entries WHERE id = %s", (entry_id,))
+    
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    
+    pfmea_record = fetch_one("""
+        SELECT part_number FROM pfmea_records WHERE id = %s
+    """, (entry['pfmea_record_id'],))
+    
+    suggestions = get_rpn_suggestions(
+        failure_mode_id=entry['failure_mode_id'],
+        part_number=pfmea_record['part_number']
+    )
+    
+    return suggestions or {}
+
+
+@app.get("/api/pfmea/entries/{entry_id}/incidents")
+async def get_similar_incidents(entry_id: int):
+    """Get similar historical incidents for a failure mode"""
+    entry = fetch_one("SELECT * FROM pfmea_failure_mode_entries WHERE id = %s", (entry_id,))
+    
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    
+    incidents = fetch_all("""
+        SELECT 
+            hi.id, 
+            hi.part_number, 
+            hi.incident_date, 
+            hi.location,
+            fm.canonical_name as failure_mode_name, 
+            hi.severity_actual as severity,
+            hi.impact_hours,
+            hi.corrective_action as action
+        FROM historical_incidents hi
+        JOIN failure_mode_taxonomy fm ON hi.failure_mode_id = fm.id
+        WHERE hi.failure_mode_id = %s
+        ORDER BY hi.incident_date DESC
+        LIMIT 10
+    """, (entry['failure_mode_id'],))
+    
+    return [dict(i) for i in incidents]
+
+
+@app.get("/api/pfmea/parts/{part_id}/similar")
+async def get_similar_parts(part_id: int):
+    """Get similar existing parts for cloning failure modes"""
+    from app.rpn_suggestion_engine import find_similar_parts
+    
+    part = fetch_one("SELECT part_name FROM pfmea_records WHERE id = %s", (part_id,))
+    
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    
+    # Exclude the current part from results
+    similar_parts = find_similar_parts(part['part_name'], limit=5)
+    
+    # Filter out the current part
+    filtered = [p for p in similar_parts if p['id'] != part_id]
+    
+    return filtered[:3]
+
+
+@app.post("/api/pfmea/parts/{part_id}/clone-failures")
+async def clone_failures_from_part(part_id: int, request: Request):
+    """Clone failure modes and process steps from a similar part"""
+    from app.rpn_suggestion_engine import get_part_failures
+    
+    data = await request.json()
+    source_part_id = data.get('source_part_id')
+    
+    if not source_part_id:
+        raise HTTPException(status_code=400, detail="source_part_id required")
+    
+    # Verify target part exists
+    target_part = fetch_one("SELECT id FROM pfmea_records WHERE id = %s", (part_id,))
+    if not target_part:
+        raise HTTPException(status_code=404, detail="Target part not found")
+    
+    # Verify source part exists
+    source_part = fetch_one("SELECT part_number FROM pfmea_records WHERE id = %s", (source_part_id,))
+    if not source_part:
+        raise HTTPException(status_code=404, detail="Source part not found")
+    
+    # Get source failures
+    source_failures = get_part_failures(source_part_id)
+    
+    # Get or create process steps on target
+    existing_steps = fetch_all("""
+        SELECT id, step_number FROM process_steps WHERE pfmea_record_id = %s
+        ORDER BY step_number
+    """, (part_id,))
+    
+    step_map = {s['step_number']: s['id'] for s in existing_steps}
+    
+    # Clone each failure
+    cloned_count = 0
+    for failure in source_failures:
+        step_number = failure['process_step_number']
+        step_id = step_map.get(step_number)
+        
+        # Skip if step doesn't exist on target
+        if not step_id:
+            continue
+        
+        # Check if this failure mode already exists on target
+        existing = fetch_one("""
+            SELECT id FROM pfmea_failure_mode_entries
+            WHERE pfmea_record_id = %s AND failure_mode_id = %s
+        """, (part_id, failure['failure_mode_id']))
+        
+        if not existing:
+            insert_and_return_id("""
+                INSERT INTO pfmea_failure_mode_entries
+                (pfmea_record_id, process_step_id, process_step_number, failure_mode_id,
+                 potential_effect, severity_user_input, occurrence_user_input, detection_user_input)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                part_id, step_id, step_number, failure['failure_mode_id'],
+                f"Potential: {failure['failure_mode_name']}",
+                failure['severity'] or 5,
+                failure['occurrence'] or 2,
+                failure['detection'] or 2
+            ))
+            cloned_count += 1
+    
+    return JSONResponse({
+        "cloned_count": cloned_count,
+        "source_part": source_part['part_number'],
+        "target_part_id": part_id,
+        "message": f"Cloned {cloned_count} failure modes from {source_part['part_number']}"
+    })
+
+
+@app.post("/api/pfmea/parts/{part_id}/entries")
+async def add_failure_mode_entry(part_id: int, request: Request):
+    """Add a new failure mode to a PFMEA part"""
+    data = await request.json()
+    
+    failure_mode_id = data.get('failure_mode_id')
+    process_step_number = data.get('process_step_number', 10)
+    potential_effect = data.get('potential_effect', '')
+    
+    if not failure_mode_id:
+        raise HTTPException(status_code=400, detail="failure_mode_id required")
+    
+    # Verify part exists
+    part = fetch_one("SELECT id FROM pfmea_records WHERE id = %s", (part_id,))
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    
+    # Verify failure mode exists
+    fm = fetch_one("SELECT canonical_name FROM failure_mode_taxonomy WHERE id = %s", (failure_mode_id,))
+    if not fm:
+        raise HTTPException(status_code=404, detail="Failure mode not found")
+    
+    # Get process step ID
+    step = fetch_one("""
+        SELECT id FROM process_steps 
+        WHERE pfmea_record_id = %s AND step_number = %s
+    """, (part_id, process_step_number))
+    
+    if not step:
+        raise HTTPException(status_code=404, detail="Process step not found")
+    
+    # Insert new entry
+    entry_id = insert_and_return_id("""
+        INSERT INTO pfmea_failure_mode_entries
+        (pfmea_record_id, process_step_id, process_step_number, failure_mode_id,
+         potential_effect, severity_user_input, occurrence_user_input, detection_user_input)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        part_id, step['id'], process_step_number, failure_mode_id,
+        potential_effect or f"Potential: {fm['canonical_name']}",
+        5, 2, 2  # Default moderate scores
+    ))
+    
+    return JSONResponse({
+        "id": entry_id,
+        "failure_mode_id": failure_mode_id,
+        "message": f"Added {fm['canonical_name']} to {part_id}"
+    })
+
+
+@app.delete("/api/pfmea/entries/{entry_id}")
+async def delete_failure_mode_entry(entry_id: int):
+    """Delete a failure mode entry from a PFMEA part"""
+    entry = fetch_one("SELECT id, pfmea_record_id FROM pfmea_failure_mode_entries WHERE id = %s", (entry_id,))
+    
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    
+    # Delete related causes
+    execute_query("""
+        DELETE FROM failure_mode_causes WHERE failure_mode_entry_id = %s
+    """, (entry_id,))
+    
+    # Delete related controls
+    execute_query("""
+        DELETE FROM process_controls WHERE failure_mode_entry_id = %s
+    """, (entry_id,))
+    
+    # Delete the entry
+    execute_query("""
+        DELETE FROM pfmea_failure_mode_entries WHERE id = %s
+    """, (entry_id,))
+    
+    return JSONResponse({
+        "message": f"Entry {entry_id} deleted",
+        "affected_part_id": entry['pfmea_record_id']
+    })
+
+
+@app.get("/api/taxonomy/failure-modes")
+async def list_failure_modes():
+    """List all available failure modes from taxonomy"""
+    modes = fetch_all("""
+        SELECT id, canonical_name, category, version
+        FROM failure_mode_taxonomy
+        ORDER BY canonical_name
+    """)
+    
+    return [dict(m) for m in modes] if modes else []
+
+
+@app.post("/api/pfmea/canvas/save")
+async def save_pfmea_draft(request: Request):
+    """Save PFMEA canvas draft"""
+    from app.database import execute_query
+    
+    data = await request.json()
+    
+    for entry in data['entries']:
+        execute_query("""
+            UPDATE pfmea_failure_mode_entries
+            SET severity_user_input = %s,
+                occurrence_user_input = %s,
+                detection_user_input = %s,
+                rpn_user_calculated = %s,
+                canvas_notes = %s,
+                updated_at = NOW()
+            WHERE id = %s
+        """, (
+            entry.get('severity_user_input'),
+            entry.get('occurrence_user_input'),
+            entry.get('detection_user_input'),
+            entry.get('rpn_user_calculated'),
+            entry.get('canvas_notes'),
+            entry['id']
+        ))
+    
+    # Update overall RPN summary
+    execute_query("""
+        UPDATE pfmea_records
+        SET overall_rpn = %s,
+            overall_rpn_average = %s,
+            updated_at = NOW()
+        WHERE id = %s
+    """, (
+        data['overall_rpn']['max'],
+        data['overall_rpn']['average'],
+        data['part_id']
+    ))
+    
+    return JSONResponse({"status": "saved"})
+
+
+@app.get("/api/pfmea/parts/{part_id}/export/excel")
+async def export_pfmea_excel(part_id: int):
+    """Export PFMEA to Excel"""
+    from app.excel_export import export_pfmea_to_excel
+    import tempfile
+    
+    try:
+        # Generate Excel file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+            file_path = export_pfmea_to_excel(part_id, tmp.name)
+        
+        part = fetch_one("SELECT part_name FROM pfmea_records WHERE id = %s", (part_id,))
+        filename = f"PFMEA_{part['part_name']}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        
+        async def iterfile():
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+            os.unlink(file_path)  # Clean up temp file
+        
+        return StreamingResponse(
+            iterfile(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================

@@ -1,0 +1,750 @@
+{% extends "base.html" %}
+
+{% block title %}PFMEA Canvas - {{ part.part_name }}{% endblock %}
+
+{% block content %}
+<style>
+    .canvas-container {
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        padding: 20px;
+        background: #f5f5f5;
+    }
+    
+    .canvas-header {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    
+    .canvas-header h1 {
+        margin: 0 0 10px 0;
+        font-size: 1.8em;
+        color: #1F4E78;
+    }
+    
+    .canvas-metadata {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 15px;
+        font-size: 0.9em;
+        color: #666;
+    }
+    
+    .metadata-item {
+        padding: 8px;
+        background: #f9f9f9;
+        border-radius: 4px;
+    }
+    
+    .metadata-label {
+        font-weight: bold;
+        color: #333;
+    }
+    
+    .canvas-layout {
+        display: grid;
+        grid-template-columns: 200px 1fr 280px;
+        gap: 15px;
+        flex: 1;
+        overflow: hidden;
+    }
+    
+    .sidebar, .main-content, .evidence-panel {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        overflow-y: auto;
+        padding: 15px;
+    }
+    
+    .sidebar h3, .main-content h3, .evidence-panel h3 {
+        margin-top: 0;
+        font-size: 1.1em;
+        color: #1F4E78;
+        border-bottom: 2px solid #e0e0e0;
+        padding-bottom: 10px;
+    }
+    
+    .process-step {
+        padding: 10px;
+        margin: 8px 0;
+        background: #f9f9f9;
+        border-left: 3px solid #667eea;
+        cursor: pointer;
+        border-radius: 4px;
+        font-size: 0.9em;
+        transition: all 0.2s ease;
+    }
+    
+    .process-step:hover {
+        background: #f0f4ff;
+        border-left-color: #4472C4;
+    }
+    
+    .process-step.active {
+        background: #e7f0f7;
+        border-left-color: #4472C4;
+        font-weight: bold;
+    }
+    
+    .fmea-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9em;
+    }
+    
+    .fmea-table th {
+        background: #4472C4;
+        color: white;
+        padding: 12px;
+        text-align: left;
+        font-weight: bold;
+        border: 1px solid #ddd;
+        white-space: nowrap;
+    }
+    
+    .fmea-table td {
+        padding: 10px;
+        border: 1px solid #ddd;
+        background: white;
+    }
+    
+    .fmea-table tr:nth-child(odd) td {
+        background: #f9f9f9;
+    }
+    
+    .fmea-table tr:hover td {
+        background: #f0f4ff;
+    }
+    
+    .rpn-input {
+        width: 50px;
+        padding: 6px;
+        text-align: center;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    
+    .rpn-score {
+        font-weight: bold;
+        text-align: center;
+        padding: 8px;
+        border-radius: 4px;
+    }
+    
+    .rpn-high {
+        background: #ffcccc;
+        color: #cc0000;
+    }
+    
+    .rpn-med {
+        background: #fff4cc;
+        color: #ff9800;
+    }
+    
+    .rpn-low {
+        background: #ccffcc;
+        color: #00aa00;
+    }
+    
+    .summary-box {
+        background: linear-gradient(135deg, #4472C4 0%, #667eea 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 20px;
+    }
+    
+    .summary-box h4 {
+        margin-top: 0;
+        margin-bottom: 12px;
+    }
+    
+    .summary-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        font-size: 0.9em;
+    }
+    
+    .summary-item {
+        background: rgba(255,255,255,0.1);
+        padding: 8px;
+        border-radius: 4px;
+    }
+    
+    .summary-label {
+        opacity: 0.9;
+    }
+    
+    .summary-value {
+        font-weight: bold;
+        font-size: 1.2em;
+    }
+    
+    .incident-card {
+        background: #f9f9f9;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 10px;
+        font-size: 0.85em;
+    }
+    
+    .incident-card h5 {
+        margin: 0 0 8px 0;
+        color: #1F4E78;
+    }
+    
+    .incident-card p {
+        margin: 3px 0;
+        color: #666;
+    }
+    
+    .incident-rpn {
+        font-weight: bold;
+        color: #cc0000;
+    }
+    
+    .canvas-footer {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        margin-top: 20px;
+        flex-wrap: wrap;
+    }
+    
+    .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 0.95em;
+        transition: all 0.3s ease;
+    }
+    
+    .btn-primary {
+        background-color: #4472C4;
+        color: white;
+    }
+    
+    .btn-primary:hover {
+        background-color: #2E5C8A;
+    }
+    
+    .btn-secondary {
+        background-color: #667eea;
+        color: white;
+    }
+    
+    .btn-secondary:hover {
+        background-color: #5568d3;
+    }
+    
+    .btn-success {
+        background-color: #70AD47;
+        color: white;
+    }
+    
+    .btn-success:hover {
+        background-color: #5a8d37;
+    }
+</style>
+
+<div class="canvas-container">
+    <!-- Header -->
+    <div class="canvas-header">
+        <h1>{{ part.part_name }} - FMEA Canvas</h1>
+        <div class="canvas-metadata">
+            <div class="metadata-item">
+                <div class="metadata-label">Part #</div>
+                <div>{{ part.part_number }}</div>
+            </div>
+            <div class="metadata-item">
+                <div class="metadata-label">Model</div>
+                <div>{{ part.model_year or 'N/A' }}</div>
+            </div>
+            <div class="metadata-item">
+                <div class="metadata-label">Status</div>
+                <div>{{ part.status }}</div>
+            </div>
+            <div class="metadata-item">
+                <div class="metadata-label">Format</div>
+                <div>{{ part.format_number or 'N/A' }}</div>
+            </div>
+        </div>
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e0e0e0; font-size: 0.85em; color: #666;">
+            <strong>Scoring Guide:</strong> 
+            <span style="margin-left: 15px;"><strong>Severity</strong> (1-10): Impact of failure if it occurs</span>
+            <span style="margin-left: 15px;"><strong>Occurrence</strong> (1-10): Likelihood of failure happening</span>
+            <span style="margin-left: 15px;"><strong>Detection</strong> (1-10): Ability to detect failure before impact</span>
+            <span style="margin-left: 15px;"><strong>RPN</strong> = Severity × Occurrence × Detection</span>
+        </div>
+    </div>
+
+    <!-- Main Canvas Layout -->
+    <div class="canvas-layout">
+        <!-- Process Steps Sidebar -->
+        <div class="sidebar">
+            <h3>Process Steps</h3>
+            <div id="process-steps-list"></div>
+        </div>
+
+        <!-- Main Content: Failure Modes Grid -->
+        <div class="main-content">
+            <h3>Failure Modes & RPN Scoring</h3>
+            <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+                <button class="btn btn-secondary" onclick="showCloneDialog()" title="Clone failures from similar part">📋 Clone Failures</button>
+                <button class="btn btn-secondary" onclick="showAddFailureDialog()" title="Add new failure mode">➕ Add Failure Mode</button>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="fmea-table">
+                    <thead>
+                        <tr>
+                            <th>Step</th>
+                            <th>Failure Mode</th>
+                            <th>Effect</th>
+                            <th title="Severity (1-10: impact of failure)">Severity</th>
+                            <th title="Occurrence (1-10: likelihood of failure)">Occurrence</th>
+                            <th title="Detection (1-10: ability to detect failure)">Detection</th>
+                            <th title="Risk Priority Number (S × O × D)">Risk Priority<br/>Number</th>
+                            <th>Suggested</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="failure-modes-tbody">
+                        <tr style="text-align: center; color: #999;">
+                            <td colspan="9">Loading failure modes...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Summary -->
+            <div class="summary-box">
+                <h4>📊 Component Risk Priority Summary</h4>
+                <div class="summary-grid">
+                    <div class="summary-item" title="Maximum Risk Priority Number (highest risk)">
+                        <div class="summary-label">Max RPN</div>
+                        <div class="summary-value" id="max-rpn">-</div>
+                    </div>
+                    <div class="summary-item" title="Average Risk Priority Number across all failures">
+                        <div class="summary-label">Avg RPN</div>
+                        <div class="summary-value" id="avg-rpn">-</div>
+                    </div>
+                    <div class="summary-item" title="Count of HIGH Risk failures (RPN > 70)">
+                        <div class="summary-label">HIGH Risk</div>
+                        <div class="summary-value" id="high-count" style="color: #ffcccc;">-</div>
+                    </div>
+                    <div class="summary-item" title="Count of MEDIUM and LOW Risk failures (RPN ≤ 70)">
+                        <div class="summary-label">MED/LOW Risk</div>
+                        <div class="summary-value" id="med-low-count">-</div>
+                    </div>
+                </div>
+                <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 0.85em; opacity: 0.9;">
+                    <strong>Risk Classification:</strong> HIGH (RPN &gt; 70) | MED (40-70) | LOW (RPN &lt; 40)
+                </div>
+            </div>
+        </div>
+
+        <!-- Evidence Panel -->
+        <div class="evidence-panel">
+            <h3>📚 Historical Incidents</h3>
+            <div id="incidents-list" style="font-size: 0.9em; color: #999;">
+                Select a failure mode to see similar incidents
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="canvas-footer">
+        <button class="btn btn-primary" onclick="saveDraft()">💾 Save Draft</button>
+        <button class="btn btn-success" onclick="calculateOverallRPN()">📈 Calculate Overall RPN</button>
+        <button class="btn btn-secondary" onclick="exportToExcel()">📊 Export to Excel</button>
+    </div>
+</div>
+
+<script>
+const partId = {{ part_id }};
+let failureModes = [];
+let selectedFailureMode = null;
+
+// Load initial data
+async function loadCanvasData() {
+    try {
+        // Get entries
+        const entriesRes = await fetch(`/api/pfmea/parts/${partId}/entries`);
+        failureModes = await entriesRes.json();
+        
+        renderFailureModes();
+        calculateOverallRPN();
+    } catch (error) {
+        console.error('Error loading canvas data:', error);
+        alert('Error loading FMEA data');
+    }
+}
+
+function renderFailureModes() {
+    const tbody = document.getElementById('failure-modes-tbody');
+    
+    if (!failureModes.length) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #999;">No failure modes found</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = failureModes.map(entry => {
+        const s = entry.severity_user_input || entry.severity_suggested || '';
+        const o = entry.occurrence_user_input || entry.occurrence_suggested || '';
+        const d = entry.detection_user_input || entry.detection_suggested || '';
+        const rpn = entry.rpn_user_calculated || entry.rpn_suggested || '';
+        
+        let riskClass = '';
+        if (rpn > 70) riskClass = 'rpn-high';
+        else if (rpn >= 40) riskClass = 'rpn-med';
+        else if (rpn) riskClass = 'rpn-low';
+        
+        return `
+            <tr onclick="selectFailureMode(${entry.id})">
+                <td>${entry.process_step_number}</td>
+                <td><strong>${entry.failure_mode_name}</strong></td>
+                <td>${entry.potential_effect || '-'}</td>
+                <td title="Severity: 1=Minor, 5=Moderate, 10=Severe"><input type="number" class="rpn-input s-${entry.id}" value="${s}" min="1" max="10" onchange="updateRPN(${entry.id})" placeholder="1-10"></td>
+                <td title="Occurrence: 1=Rare, 5=Occasional, 10=Frequent"><input type="number" class="rpn-input o-${entry.id}" value="${o}" min="1" max="10" onchange="updateRPN(${entry.id})" placeholder="1-10"></td>
+                <td title="Detection: 1=Certain, 5=Moderate, 10=Impossible"><input type="number" class="rpn-input d-${entry.id}" value="${d}" min="1" max="10" onchange="updateRPN(${entry.id})" placeholder="1-10"></td>
+                <td title="Risk Priority Number = Severity × Occurrence × Detection"><div class="rpn-score ${riskClass}">${rpn}</div></td>
+                <td>${entry.rpn_suggested || '-'}</td>
+                <td><button class="btn" onclick="event.stopPropagation(); deleteFailureMode(${entry.id})" style="padding: 5px 10px; font-size: 0.8em; background: #cc3333; color: white;">🗑️</button></td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function updateRPN(entryId) {
+    const entry = failureModes.find(e => e.id === entryId);
+    if (!entry) return;
+    
+    const sInput = parseFloat(document.querySelector(`.s-${entryId}`).value) || 0;
+    const oInput = parseFloat(document.querySelector(`.o-${entryId}`).value) || 0;
+    const dInput = parseFloat(document.querySelector(`.d-${entryId}`).value) || 0;
+    
+    entry.severity_user_input = sInput;
+    entry.occurrence_user_input = oInput;
+    entry.detection_user_input = dInput;
+    entry.rpn_user_calculated = sInput * oInput * dInput;
+    
+    renderFailureModes();
+    calculateOverallRPN();
+}
+
+function selectFailureMode(entryId) {
+    selectedFailureMode = failureModes.find(e => e.id === entryId);
+    if (selectedFailureMode) {
+        showSimilarIncidents(entryId);
+    }
+}
+
+async function showSimilarIncidents(entryId) {
+    try {
+        const res = await fetch(`/api/pfmea/entries/${entryId}/incidents`);
+        const incidents = await res.json();
+        
+        const panel = document.getElementById('incidents-list');
+        
+        if (!incidents.length) {
+            panel.innerHTML = '<p style="color: #999;">No similar incidents found</p>';
+            return;
+        }
+        
+        panel.innerHTML = incidents.map(incident => `
+            <div class="incident-card">
+                <h5>${incident.failure_mode_name}</h5>
+                <p><strong>Date:</strong> ${incident.incident_date}</p>
+                <p><strong>Location:</strong> ${incident.location || 'N/A'}</p>
+                <p><strong>Severity:</strong> ${incident.severity || 'N/A'}</p>
+                <p><strong>Impact:</strong> ${incident.impact_hours || 'N/A'} hours</p>
+                <p><strong>Action:</strong> ${incident.action || 'N/A'}</p>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Error loading incidents:', error);
+    }
+}
+
+function calculateOverallRPN() {
+    const rpns = failureModes.map(e => e.rpn_user_calculated || e.rpn_suggested || 0);
+    
+    const maxRPN = Math.max(...rpns, 0);
+    const avgRPN = rpns.length > 0 ? (rpns.reduce((a, b) => a + b, 0) / rpns.length).toFixed(1) : 0;
+    const highCount = rpns.filter(r => r > 70).length;
+    const medLowCount = rpns.filter(r => r <= 70).length;
+    
+    document.getElementById('max-rpn').textContent = maxRPN;
+    document.getElementById('avg-rpn').textContent = avgRPN;
+    document.getElementById('high-count').textContent = highCount;
+    document.getElementById('med-low-count').textContent = medLowCount;
+}
+
+async function saveDraft() {
+    try {
+        const rpns = failureModes.map(e => e.rpn_user_calculated || e.rpn_suggested || 0);
+        const maxRPN = Math.max(...rpns, 0);
+        const avgRPN = rpns.length > 0 ? rpns.reduce((a, b) => a + b, 0) / rpns.length : 0;
+        
+        const payload = {
+            part_id: partId,
+            entries: failureModes,
+            overall_rpn: {
+                max: maxRPN,
+                average: avgRPN,
+                highCount: rpns.filter(r => r > 70).length,
+                medCount: rpns.filter(r => r >= 40 && r <= 70).length,
+                lowCount: rpns.filter(r => r < 40).length
+            }
+        };
+        
+        const res = await fetch('/api/pfmea/canvas/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        if (res.ok) {
+            alert('✓ Draft saved successfully!');
+        } else {
+            alert('Error saving draft');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Error saving draft');
+    }
+}
+
+async function exportToExcel() {
+    try {
+        await saveDraft();
+        window.location.href = `/api/pfmea/parts/${partId}/export/excel`;
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Error exporting to Excel');
+    }
+}
+
+async function deleteFailureMode(entryId) {
+    if (!confirm('Delete this failure mode?')) return;
+    
+    try {
+        const res = await fetch(`/api/pfmea/entries/${entryId}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (res.ok) {
+            // Reload failure modes
+            const entriesRes = await fetch(`/api/pfmea/parts/${partId}/entries`);
+            failureModes = await entriesRes.json();
+            renderFailureModes();
+            calculateOverallRPN();
+            alert('✓ Failure mode deleted');
+        } else {
+            alert('Error deleting failure mode');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Error deleting failure mode');
+    }
+}
+
+async function showCloneDialog() {
+    try {
+        const res = await fetch(`/api/pfmea/parts/${partId}/similar`);
+        const similarParts = await res.json();
+        
+        if (!similarParts.length) {
+            alert('No similar parts found to clone from');
+            return;
+        }
+        
+        // Create simple select dialog
+        let options = similarParts.map(p => `<option value="${p.id}">${p.part_number} - ${p.part_name}</option>`).join('');
+        
+        const dialog = document.createElement('div');
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            z-index: 1000;
+            min-width: 300px;
+        `;
+        
+        dialog.innerHTML = `
+            <h3>Clone Failures From Similar Part</h3>
+            <select id="clone-select" style="width: 100%; padding: 8px; margin: 10px 0;">
+                <option value="">Select a part...</option>
+                ${options}
+            </select>
+            <div style="display: flex; gap: 10px; margin-top: 15px;">
+                <button class="btn btn-primary" onclick="confirmClone()">Clone</button>
+                <button class="btn" onclick="this.parentElement.parentElement.remove()" style="background: #ccc; color: #333;">Cancel</button>
+            </div>
+        `;
+        
+        document.body.appendChild(dialog);
+        
+        window.confirmClone = async function() {
+            const sourcePartId = document.getElementById('clone-select').value;
+            if (!sourcePartId) {
+                alert('Select a part to clone from');
+                return;
+            }
+            
+            try {
+                const res = await fetch(`/api/pfmea/parts/${partId}/clone-failures`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_part_id: parseInt(sourcePartId) })
+                });
+                
+                if (res.ok) {
+                    const result = await res.json();
+                    dialog.remove();
+                    
+                    // Reload failure modes
+                    const entriesRes = await fetch(`/api/pfmea/parts/${partId}/entries`);
+                    failureModes = await entriesRes.json();
+                    renderFailureModes();
+                    calculateOverallRPN();
+                    
+                    alert(`✓ Cloned ${result.cloned_count} failure modes`);
+                } else {
+                    alert('Error cloning failures');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error cloning failures');
+            }
+        };
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Error loading similar parts');
+    }
+}
+
+async function showAddFailureDialog() {
+    try {
+        // Get all failure mode taxonomy
+        const res = await fetch('/api/taxonomy/failure-modes');
+        const allModes = await res.json() || [];
+        
+        // Get current failure mode IDs on this part
+        const currentIds = new Set(failureModes.map(fm => fm.failure_mode_id));
+        
+        // Filter to show only modes not yet added
+        const availableModes = allModes.filter(m => !currentIds.has(m.id));
+        
+        if (!availableModes.length) {
+            alert('All available failure modes are already added');
+            return;
+        }
+        
+        // Get process steps
+        const stepsRes = await fetch(`/api/pfmea/parts/${partId}/steps`);
+        const steps = await stepsRes.json();
+        
+        let modeOptions = availableModes.map(m => `<option value="${m.id}">${m.canonical_name}</option>`).join('');
+        let stepOptions = steps.map(s => `<option value="${s.step_number}">${s.step_name}</option>`).join('');
+        
+        const dialog = document.createElement('div');
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            z-index: 1000;
+            min-width: 350px;
+        `;
+        
+        dialog.innerHTML = `
+            <h3>Add New Failure Mode</h3>
+            <div style="margin: 15px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Failure Mode:</label>
+                <select id="add-mode-select" style="width: 100%; padding: 8px;">
+                    <option value="">Select a failure mode...</option>
+                    ${modeOptions}
+                </select>
+            </div>
+            <div style="margin: 15px 0;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Process Step:</label>
+                <select id="add-step-select" style="width: 100%; padding: 8px;">
+                    ${stepOptions}
+                </select>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 15px;">
+                <button class="btn btn-primary" onclick="confirmAddFailure()">Add</button>
+                <button class="btn" onclick="this.parentElement.parentElement.remove()" style="background: #ccc; color: #333;">Cancel</button>
+            </div>
+        `;
+        
+        document.body.appendChild(dialog);
+        
+        window.confirmAddFailure = async function() {
+            const failureModeId = document.getElementById('add-mode-select').value;
+            const processStepNumber = document.getElementById('add-step-select').value;
+            
+            if (!failureModeId) {
+                alert('Select a failure mode');
+                return;
+            }
+            
+            try {
+                const res = await fetch(`/api/pfmea/parts/${partId}/entries`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        failure_mode_id: parseInt(failureModeId),
+                        process_step_number: parseInt(processStepNumber)
+                    })
+                });
+                
+                if (res.ok) {
+                    dialog.remove();
+                    
+                    // Reload failure modes
+                    const entriesRes = await fetch(`/api/pfmea/parts/${partId}/entries`);
+                    failureModes = await entriesRes.json();
+                    renderFailureModes();
+                    calculateOverallRPN();
+                    
+                    alert('✓ Failure mode added');
+                } else {
+                    alert('Error adding failure mode');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error adding failure mode');
+            }
+        };
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Error loading available failure modes');
+    }
+}
+
+// Initialize
+loadCanvasData();
+</script>
+{% endblock %}
