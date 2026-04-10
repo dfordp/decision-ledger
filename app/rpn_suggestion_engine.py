@@ -75,11 +75,16 @@ def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) 
     # Calculate suggested scores from historical data
     severities = [i.get('severity_actual') for i in unique_incidents if i.get('severity_actual')]
     
+    # Set suggested severity from historical data or default to median
+    severity_suggested = int(median(severities)) if severities else 5
+    occurrence_suggested = min(5, max(1, len(unique_incidents) // 2))  # Based on frequency
+    detection_suggested = 3  # Default moderate detection difficulty
+    
     suggestions = {
-        'severity_suggested': int(median(severities)) if severities else None,
-        'occurrence_suggested': min(5, max(1, len(unique_incidents) // 2)),  # Based on frequency
-        'detection_suggested': 3,  # Default moderate detection difficulty
-        'rpn_suggested': None,
+        'severity_suggested': severity_suggested,
+        'occurrence_suggested': occurrence_suggested,
+        'detection_suggested': detection_suggested,
+        'rpn_suggested': severity_suggested * occurrence_suggested * detection_suggested,  # Always calculate
         'similar_incident_count': len(unique_incidents),
         'incidents': [
             {
@@ -94,14 +99,6 @@ def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) 
             for i in unique_incidents[:5]  # Top 5 incidents
         ]
     }
-    
-    # Calculate RPN if we have all three scores
-    if suggestions['severity_suggested'] and suggestions['occurrence_suggested'] and suggestions['detection_suggested']:
-        suggestions['rpn_suggested'] = (
-            suggestions['severity_suggested'] *
-            suggestions['occurrence_suggested'] *
-            suggestions['detection_suggested']
-        )
     
     return suggestions
 

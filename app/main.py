@@ -1918,17 +1918,34 @@ async def get_failure_mode_entries(part_id: int):
             part_number=part['part_number']
         )
         
+        # Always set suggested values (with defaults if no historical data)
         if suggestions:
             entry_dict['severity_suggested'] = suggestions.get('severity_suggested')
             entry_dict['occurrence_suggested'] = suggestions.get('occurrence_suggested')
             entry_dict['detection_suggested'] = suggestions.get('detection_suggested')
             entry_dict['rpn_suggested'] = suggestions.get('rpn_suggested')
             entry_dict['similar_incidents_count'] = suggestions.get('similar_incident_count', 0)
+        else:
+            # No historical data: Set reasonable defaults
+            entry_dict['severity_suggested'] = 5  # Default moderate severity
+            entry_dict['occurrence_suggested'] = 3  # Default moderate occurrence
+            entry_dict['detection_suggested'] = 3  # Default moderate detection
+            entry_dict['rpn_suggested'] = 5 * 3 * 3  # = 45 (moderate risk)
+            entry_dict['similar_incidents_count'] = 0
         
-        # Classify RPN risk
+        # Calculate RPN if user has entered values (S * O * D)
+        s_user = entry_dict.get('severity_user_input')
+        o_user = entry_dict.get('occurrence_user_input')
+        d_user = entry_dict.get('detection_user_input')
+        
+        if s_user and o_user and d_user:
+            entry_dict['rpn_user_calculated'] = s_user * o_user * d_user
+        
+        # Ensure we have an RPN value for display (prefer user-calculated, fall back to suggested)
         rpn = entry_dict.get('rpn_user_calculated') or entry_dict.get('rpn_suggested')
         if rpn:
             entry_dict['rpn_risk_class'] = classify_rpn_risk(rpn)
+            entry_dict['rpn_display'] = rpn  # Add explicit display value
         
         result.append(entry_dict)
     

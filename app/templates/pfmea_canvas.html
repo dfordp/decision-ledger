@@ -313,8 +313,8 @@
                             <th title="Severity (1-10: impact of failure)">Severity</th>
                             <th title="Occurrence (1-10: likelihood of failure)">Occurrence</th>
                             <th title="Detection (1-10: ability to detect failure)">Detection</th>
-                            <th title="Risk Priority Number (S × O × D)">Risk Priority<br/>Number</th>
-                            <th>Suggested</th>
+                            <th title="Risk Priority Number (S × O × D)">RPN</th>
+                            <th title="Suggested RPN from historical data">Suggested RPN</th>
                             <th>Action</th>
                         </tr>
                     </thead>
@@ -382,6 +382,20 @@ async function loadCanvasData() {
         const entriesRes = await fetch(`/api/pfmea/parts/${partId}/entries`);
         failureModes = await entriesRes.json();
         
+        // Pre-calculate RPN for all entries to populate display
+        for (let entry of failureModes) {
+            const s = entry.severity_user_input || entry.severity_suggested || 0;
+            const o = entry.occurrence_user_input || entry.occurrence_suggested || 0;
+            const d = entry.detection_user_input || entry.detection_suggested || 0;
+            
+            // Calculate RPN if we have values (prefer user input, fall back to suggested)
+            if ((entry.severity_user_input || entry.severity_suggested) && 
+                (entry.occurrence_user_input || entry.occurrence_suggested) && 
+                (entry.detection_user_input || entry.detection_suggested)) {
+                entry.rpn_user_calculated = entry.rpn_user_calculated || (s * o * d);
+            }
+        }
+        
         renderFailureModes();
         calculateOverallRPN();
     } catch (error) {
@@ -402,7 +416,17 @@ function renderFailureModes() {
         const s = entry.severity_user_input || entry.severity_suggested || '';
         const o = entry.occurrence_user_input || entry.occurrence_suggested || '';
         const d = entry.detection_user_input || entry.detection_suggested || '';
-        const rpn = entry.rpn_user_calculated || entry.rpn_suggested || '';
+        
+        // Calculate RPN from current values (S * O * D)
+        let rpn = '';
+        const s_val = parseFloat(s) || 0;
+        const o_val = parseFloat(o) || 0;
+        const d_val = parseFloat(d) || 0;
+        if (s_val > 0 && o_val > 0 && d_val > 0) {
+            rpn = s_val * o_val * d_val;
+        } else {
+            rpn = entry.rpn_user_calculated || entry.rpn_suggested || '';
+        }
         
         let riskClass = '';
         if (rpn > 70) riskClass = 'rpn-high';
@@ -436,7 +460,13 @@ function updateRPN(entryId) {
     entry.severity_user_input = sInput;
     entry.occurrence_user_input = oInput;
     entry.detection_user_input = dInput;
-    entry.rpn_user_calculated = sInput * oInput * dInput;
+    
+    // Calculate RPN: S × O × D
+    if (sInput > 0 && oInput > 0 && dInput > 0) {
+        entry.rpn_user_calculated = sInput * oInput * dInput;
+    } else {
+        entry.rpn_user_calculated = null;  // Reset if any value is 0
+    }
     
     renderFailureModes();
     calculateOverallRPN();

@@ -63,12 +63,11 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
     ws.column_dimensions['B'].width = 20
     ws.column_dimensions['C'].width = 25
     ws.column_dimensions['D'].width = 30
-    ws.column_dimensions['E'].width = 5
-    ws.column_dimensions['F'].width = 5
-    ws.column_dimensions['G'].width = 5
-    ws.column_dimensions['H'].width = 5
-    ws.column_dimensions['I'].width = 12
-    ws.column_dimensions['J'].width = 12
+    ws.column_dimensions['E'].width = 8
+    ws.column_dimensions['F'].width = 8
+    ws.column_dimensions['G'].width = 8
+    ws.column_dimensions['H'].width = 8
+    ws.column_dimensions['I'].width = 10
     
     # ========== Header Section ==========
     border = Border(
@@ -83,10 +82,10 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
     header_font = Font(bold=True, color="FFFFFF", size=12)
     
     cells_to_merge = [
-        ('A', 'J', row)
+        ('A', 'M', row)
     ]
     
-    ws.merge_cells(f'A{row}:J{row}')
+    ws.merge_cells(f'A{row}:I{row}')
     cell = ws[f'A{row}']
     cell.value = part.get('part_name', 'PFMEA Report')
     cell.font = header_font
@@ -124,7 +123,6 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
         "Occurrence",
         "Detection",
         "Risk Priority Number",
-        "Suggested RPN",
         "Risk Level"
     ]
     
@@ -148,12 +146,16 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
     for idx, entry in enumerate(entries):
         fill = data_fill_even if idx % 2 == 0 else data_fill_odd
         
-        # Get scores
+        # Get user-entered scores
         severity = entry.get('severity_user_input') or entry.get('severity_suggested') or ""
         occurrence = entry.get('occurrence_user_input') or entry.get('occurrence_suggested') or ""
         detection = entry.get('detection_user_input') or entry.get('detection_suggested') or ""
-        rpn = entry.get('rpn_user_calculated') or entry.get('rpn_suggested') or ""
-        suggested = entry.get('rpn_suggested') or ""
+        
+        # Calculate RPN from entered values (S * O * D)
+        if entry.get('severity_user_input') and entry.get('occurrence_user_input') and entry.get('detection_user_input'):
+            rpn = entry.get('severity_user_input') * entry.get('occurrence_user_input') * entry.get('detection_user_input')
+        else:
+            rpn = entry.get('rpn_user_calculated') or entry.get('rpn_suggested') or ""
         
         # Determine risk class and color
         if rpn:
@@ -174,7 +176,7 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
             risk_fill = fill
             risk_font = Font()
         
-        # Row data
+        # Row data - simplified to only show user scores and RPN
         row_data = [
             entry.get('process_step_number'),
             entry.get('process_step_name'),
@@ -184,7 +186,6 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
             occurrence,
             detection,
             rpn,
-            suggested,
             risk_class
         ]
         
