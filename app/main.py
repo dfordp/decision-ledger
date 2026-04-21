@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 import re
 import tempfile
+from psycopg2.extras import Json
 
 from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -1769,7 +1770,7 @@ async def create_pfmea_part(request: Request):
         
         # Clone process steps from similar part
         source_steps = fetch_all("""
-            SELECT step_number, step_name, process_function
+            SELECT step_number, step_name, function_hierarchy, design_intent, critical_parameters
             FROM process_steps WHERE pfmea_record_id = %s
             ORDER BY step_number
         """, (source_part_id,))
@@ -1777,9 +1778,9 @@ async def create_pfmea_part(request: Request):
         step_id_map = {}
         for step in source_steps:
             step_id = insert_and_return_id("""
-                INSERT INTO process_steps (pfmea_record_id, step_number, step_name, process_function)
-                VALUES (%s, %s, %s, %s)
-            """, (part_id, step['step_number'], step['step_name'], step['process_function']))
+                INSERT INTO process_steps (pfmea_record_id, step_number, step_name, function_hierarchy, design_intent, critical_parameters)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (part_id, step['step_number'], step['step_name'], step.get('function_hierarchy'), step.get('design_intent'), Json(step.get('critical_parameters', []))))
             step_id_map[step['step_number']] = step_id
         
         # Clone failure modes from similar part
@@ -1813,19 +1814,19 @@ async def create_pfmea_part(request: Request):
             ))
             modes_added += 1
     else:
-        # Fallback: Create default process steps and auto-populate with pgvector search
+        # Fallback: Create default design functions and auto-populate with pgvector search
         default_steps = [
-            {"step_number": 10, "step_name": "Step 1", "process_function": "Manufacturing Step 1"},
-            {"step_number": 20, "step_name": "Step 2", "process_function": "Manufacturing Step 2"},
-            {"step_number": 30, "step_name": "Step 3", "process_function": "Manufacturing Step 3"},
+            {"step_number": 10, "step_name": "Design Function 1", "function_hierarchy": f"{data['part_name']} > Component 1", "design_intent": "Primary design function"},
+            {"step_number": 20, "step_name": "Design Function 2", "function_hierarchy": f"{data['part_name']} > Component 2", "design_intent": "Secondary design function"},
+            {"step_number": 30, "step_name": "Design Function 3", "function_hierarchy": f"{data['part_name']} > Component 3", "design_intent": "Tertiary design function"},
         ]
         
         step_id_map = {}
         for step in default_steps:
             step_id = insert_and_return_id("""
-                INSERT INTO process_steps (pfmea_record_id, step_number, step_name, process_function)
-                VALUES (%s, %s, %s, %s)
-            """, (part_id, step['step_number'], step['step_name'], step['process_function']))
+                INSERT INTO process_steps (pfmea_record_id, step_number, step_name, function_hierarchy, design_intent, critical_parameters)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (part_id, step['step_number'], step['step_name'], step['function_hierarchy'], step['design_intent'], Json([])))
             step_id_map[step['step_number']] = step_id
         
         # Find relevant failure modes using pgvector semantic search
@@ -2152,12 +2153,12 @@ async def delete_failure_mode_entry(entry_id: int):
     
     # Delete related causes
     execute_query("""
-        DELETE FROM failure_mode_causes WHERE failure_mode_entry_id = %s
+        DELETE FROM failure_mode_causes WHERE fmea_entry_id = %s
     """, (entry_id,))
     
     # Delete related controls
     execute_query("""
-        DELETE FROM process_controls WHERE failure_mode_entry_id = %s
+        DELETE FROM process_controls WHERE fmea_entry_id = %s
     """, (entry_id,))
     
     # Delete the entry

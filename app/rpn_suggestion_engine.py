@@ -1,7 +1,7 @@
 """
-RPN Suggestion Engine
-Queries historical incidents for similar failure modes
-Returns suggested S/O/D/RPN scores based on past data
+RPN Suggestion Engine for DFMEA
+Queries historical design incidents for similar failure modes
+Returns suggested S/O/D/RPN scores based on design margins and validation effectiveness
 """
 
 from typing import List, Optional, Dict, Any
@@ -11,8 +11,8 @@ from app.database import fetch_one, fetch_all, vector_search
 
 def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) -> Optional[Dict[str, Any]]:
     """
-    Find similar historical incidents for a failure mode
-    Return suggested S/O/D/RPN scores based on historical data
+    Find similar historical design validation incidents for a failure mode
+    Return suggested S/O/D/RPN scores based on design margins and validation effectiveness
     
     Args:
         failure_mode_id: ID of the failure mode to find suggestions for
@@ -20,7 +20,14 @@ def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) 
         limit: Number of historical incidents to consider
     
     Returns:
-        Dictionary with suggested S/O/D/RPN scores, or None if no history found
+        Dictionary with suggested S/O/D/RPN scores incorporating design margins and validation, or None if no history
+        
+    New DFMEA Semantics:
+        - Severity (S): Functional consequence (1-10 unchanged)
+        - Occurrence (O): Derived from design_margin_loss / safety_factor_assumed
+          Formula: O = clamp(1-10, design_margin_loss / safety_factor × 10)
+        - Detection (D): Derived from validation measure effectiveness
+          Formula: D = 10 - max(effectiveness_percent from validation measures)
     """
     
     # Query 1: Find historical incidents for same failure mode
@@ -30,6 +37,7 @@ def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) 
             hi.part_number,
             hi.incident_date,
             hi.severity_actual,
+            hi.design_margin_loss,
             hi.location,
             hi.impact_hours,
             hi.corrective_action
@@ -39,7 +47,7 @@ def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) 
         LIMIT %s
     """, (failure_mode_id, limit))
     
-    # Query 2: Find similar historical incidents by failure mode similarity
+    # Query 2: Find similar historical incidents by failure mode embedding
     failure_mode = fetch_one("""
         SELECT * FROM failure_mode_taxonomy WHERE id = %s
     """, (failure_mode_id,))
@@ -49,17 +57,20 @@ def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) 
     
     similar_mode_incidents = []
     if failure_mode.get('embedding'):
+        # Vector search with part context isolation
+        # Filter by same part family to avoid cross-contamination
+        # (e.g., Horn issues don't pull Saari Guard incidents)
         similar_mode_incidents = vector_search(
             table="historical_incidents",
             embedding_column="embedding",
             query_embedding=failure_mode['embedding'],
             limit=limit,
+            additional_conditions="AND part_number = %s",
+            params=(part_number,)
         )
     
-    # Combine both queries
+    # Combine and deduplicate
     all_incidents = same_mode_incidents + similar_mode_incidents
-    
-    # Deduplicate by incident ID
     seen_ids = set()
     unique_incidents = []
     for incident in all_incidents:
@@ -72,20 +83,43 @@ def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) 
     if not unique_incidents:
         return None
     
-    # Calculate suggested scores from historical data
+    # Calculate suggested scores using design-focused metrics
+    # Severity: From historical severity (unchanged)
     severities = [i.get('severity_actual') for i in unique_incidents if i.get('severity_actual')]
-    
-    # Set suggested severity from historical data or default to median
     severity_suggested = int(median(severities)) if severities else 5
-    occurrence_suggested = min(5, max(1, len(unique_incidents) // 2))  # Based on frequency
-    detection_suggested = 3  # Default moderate detection difficulty
+    
+    # Occurrence: From design margin losses (new DFMEA logic)
+    # O = min(10, max(1, design_margin_loss / safety_factor × 10))
+    # Without safety_factor data, approximate: O ≈ design_margin_loss × 10
+    margin_losses = [i.get('design_margin_loss') for i in unique_incidents if i.get('design_margin_loss')]
+    if margin_losses:
+        median_margin_loss = median(margin_losses)
+        occurrence_suggested = int(min(10, max(1, median_margin_loss * 10)))  # Scale 0-1 margin to 1-10 O
+    else:
+        occurrence_suggested = 5  # Default mid-range if no historical margin data
+    
+    # Detection: From validation measure effectiveness (new DFMEA logic)
+    # Query validation measures effectiveness for this failure mode in historical FMEAs
+    validation_effectiveness = fetch_all("""
+        SELECT effectiveness_percent FROM process_controls pc
+        JOIN pfmea_failure_mode_entries pfme ON pc.fmea_entry_id = pfme.id
+        WHERE pfme.failure_mode_id = %s
+        LIMIT %s
+    """, (failure_mode_id, limit))
+    
+    if validation_effectiveness:
+        max_effectiveness = max([v.get('effectiveness_percent', 0) for v in validation_effectiveness])
+        detection_suggested = max(1, 10 - max_effectiveness)  # D = 10 - confidence
+    else:
+        detection_suggested = 10  # No validation = D=10 (worst case)
     
     suggestions = {
         'severity_suggested': severity_suggested,
         'occurrence_suggested': occurrence_suggested,
         'detection_suggested': detection_suggested,
-        'rpn_suggested': severity_suggested * occurrence_suggested * detection_suggested,  # Always calculate
+        'rpn_suggested': severity_suggested * occurrence_suggested * detection_suggested,
         'similar_incident_count': len(unique_incidents),
+        'calculation_method': 'DFMEA_design_margin_validation_based',
         'incidents': [
             {
                 'id': i['id'],
@@ -93,10 +127,11 @@ def get_rpn_suggestions(failure_mode_id: int, part_number: str, limit: int = 5) 
                 'incident_date': str(i.get('incident_date')),
                 'location': i.get('location'),
                 'severity_actual': i.get('severity_actual'),
+                'design_margin_loss': i.get('design_margin_loss'),
                 'impact_hours': i.get('impact_hours'),
                 'corrective_action': i.get('corrective_action')
             }
-            for i in unique_incidents[:5]  # Top 5 incidents
+            for i in unique_incidents[:5]
         ]
     }
     
@@ -202,38 +237,69 @@ def get_rpn_summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def find_similar_parts(part_name: str, limit: int = 3) -> List[Dict]:
     """
-    Find similar existing parts using fuzzy word matching
+    Find similar existing parts using pgvector semantic search on embeddings.
+    Falls back to fuzzy word matching if embeddings unavailable.
     
     Args:
         part_name: Name of the new part to match
         limit: Maximum number of similar parts to return
     
     Returns:
-        List of similar parts ranked by match score
+        List of similar parts ranked by embedding similarity score
     """
     all_parts = fetch_all("""
         SELECT id, part_number, part_name, model_year FROM pfmea_records
-        ORDER BY part_number
+        ORDER BY created_at DESC
     """)
     
     if not all_parts:
         return []
     
-    # Split part name into words and score matches
+    # Try vector search first if embeddings are available
+    try:
+        from app.embeddings import generate_embedding
+        
+        # Generate embedding for search query
+        query_embedding = generate_embedding(part_name)
+        
+        # Use pgvector cosine distance search
+        similar_parts = fetch_all("""
+            SELECT 
+                id, part_number, part_name, model_year,
+                1 - (embedding <=> %s::vector) as match_score
+            FROM pfmea_records
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """, (str(query_embedding), str(query_embedding), limit))
+        
+        if similar_parts:
+            return [dict(p) for p in similar_parts]
+    except Exception:
+        pass  # Fall through to fuzzy matching
+    
+    # Fallback: Fuzzy word matching
     search_words = part_name.lower().split()
     scored_parts = []
     
     for p in all_parts:
         part_words = p['part_name'].lower().split()
-        # Count matching words
+        # Count matching words (case-insensitive, substring matching)
         match_score = sum(1 for w in search_words if any(w in pw or pw in w for pw in part_words))
         
         if match_score > 0:
             scored_parts.append({**p, 'match_score': match_score})
     
-    # Sort by match score descending
-    scored_parts.sort(key=lambda x: x['match_score'], reverse=True)
-    return scored_parts[:limit]
+    # If we found matching parts, return them sorted by score
+    if scored_parts:
+        scored_parts.sort(key=lambda x: x['match_score'], reverse=True)
+        return scored_parts[:limit]
+    
+    # Ultimate fallback: return most recent parts
+    fallback_parts = []
+    for p in all_parts[:limit]:
+        fallback_parts.append({**p, 'match_score': 0})
+    return fallback_parts
 
 
 def get_part_failures(part_id: int) -> List[Dict]:
@@ -268,7 +334,7 @@ def get_part_failures(part_id: int) -> List[Dict]:
 def find_relevant_failure_modes(part_name: str, part_number: str, limit: int = 5) -> List[Dict[str, Any]]:
     """
     Use pgvector semantic search to find relevant failure modes for a new part
-    based on part name and description
+    based on part name and description. Falls back to taxonomy if embeddings unavailable.
     
     Args:
         part_name: Name of the new part (e.g., "Horn Comp Assembly")
@@ -278,21 +344,7 @@ def find_relevant_failure_modes(part_name: str, part_number: str, limit: int = 5
     Returns:
         List of relevant failure modes from taxonomy with IDs and details
     """
-    try:
-        from app.embeddings import embed_text
-    except ImportError:
-        # Fallback if embeddings not available
-        all_modes = fetch_all("""
-            SELECT id, canonical_name, category, version 
-            FROM failure_mode_taxonomy 
-            LIMIT %s
-        """, (limit,))
-        return all_modes if all_modes else []
-    
-    # Create a search query from part name and number
-    search_query = f"{part_name} {part_number}".lower()
-    
-    # Get all failure modes from taxonomy
+    # First, try to get ANY failure modes from taxonomy
     all_failure_modes = fetch_all("""
         SELECT 
             id,
@@ -309,14 +361,23 @@ def find_relevant_failure_modes(part_name: str, part_number: str, limit: int = 5
     if not all_failure_modes:
         return []
     
-    # Score each failure mode by semantic similarity
-    scored_modes = []
+    # If we have fewer modes than requested, just return all
+    if len(all_failure_modes) <= limit:
+        return all_failure_modes
+    
+    # Try to use embeddings for smarter selection
     try:
+        from app.embeddings import embed_text
+        
+        # Create a search query from part name and number
+        search_query = f"{part_name} {part_number}".lower()
         query_embedding = embed_text(search_query)
         
+        # Score each failure mode by semantic similarity
+        scored_modes = []
         for mode in all_failure_modes:
             if mode.get('embedding'):
-                # Calculate cosine similarity (dot product approximation)
+                # Calculate cosine similarity (dot product)
                 similarity_score = sum(
                     a * b for a, b in zip(query_embedding, mode.get('embedding', []))
                 )
@@ -328,5 +389,5 @@ def find_relevant_failure_modes(part_name: str, part_number: str, limit: int = 5
         scored_modes.sort(key=lambda x: x['similarity_score'], reverse=True)
         return scored_modes[:limit]
     except Exception:
-        # Fallback: return first N modes
+        # Fallback: return first N modes if embeddings fail
         return all_failure_modes[:limit]

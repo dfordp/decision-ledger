@@ -121,46 +121,56 @@ class DecisionUpdateResponse(BaseModel):
 
 
 # ============================================================================
-# PFMEA (Process Failure Mode & Effects Analysis) Models
+# DFMEA (Design Failure Mode & Effects Analysis) Models
 # ============================================================================
 
 # Failure Mode Taxonomy
 class FailureModeTaxonomy(BaseModel):
     id: int
     canonical_name: str
-    category: str
+    category: str  # ELECTRICAL, MECHANICAL, MATERIAL, DESIGN_INTERFACE, ENVIRONMENTAL, etc.
     description: Optional[str] = None
     typical_severity_range: Optional[List[int]] = None
     aliases: List[str] = []
     version: int = 1
     approved_by: Optional[str] = None
 
-# Process Step
-class ProcessStep(BaseModel):
+# Design Function (component/subsystem in the product hierarchy)
+class DesignFunction(BaseModel):
+    """Represents a functional component in the design hierarchy"""
     id: int
     step_number: int
     step_name: str
-    process_function: Optional[str] = None
+    function_hierarchy: Optional[str] = None
+    design_intent: Optional[str] = None
+    critical_parameters: List[str] = []
 
-# Failure Mode Cause
+# Backward compatibility alias
+ProcessStep = DesignFunction
+
+# Failure Mode Cause (with design margin analysis)
 class FailureModeCause(BaseModel):
     id: Optional[int] = None
     cause_sequence: int = 1
     canonical_cause: str
-    cause_category: str
+    cause_category: Literal["MATERIAL", "GEOMETRY", "SPECIFICATION", "TOLERANCE", "DESIGN_INTERFACE", "ENVIRONMENTAL"]
     description: Optional[str] = None
-    occurrence_score: Optional[int] = None
+    design_margin_loss: Optional[float] = None
+    safety_factor_assumed: Optional[float] = None
 
-# Process Control
-class ProcessControl(BaseModel):
+# Design Validation Measure (testing, simulation, analysis)
+class ValidationMeasure(BaseModel):
     id: Optional[int] = None
-    control_type: Literal["PREVENTION", "DETECTION"]
+    control_type: Literal["ANALYSIS", "TESTING", "PROTOTYPE", "SIMULATION"]
     control_description: str
-    method: Optional[str] = None
-    frequency: Optional[str] = None
+    test_method: Optional[str] = None
     effectiveness_percent: int = 90
+    test_results_json: Optional[dict] = None
 
-# PFMEA Failure Mode Entry
+# Backward compatibility alias
+ProcessControl = ValidationMeasure
+
+# DFMEA Failure Mode Entry
 class PFMEAFailureModeEntry(BaseModel):
     id: Optional[int] = None
     pfmea_record_id: int
@@ -169,13 +179,14 @@ class PFMEAFailureModeEntry(BaseModel):
     failure_mode_id: int
     failure_mode_name: Optional[str] = None
     
-    # User Input Scores
+    # User Input Scores (Design-focused semantics)
+    # S = Functional consequence, O = Design margin probability, D = Validation test effectiveness
     severity_user_input: Optional[int] = Field(None, ge=1, le=10)
     occurrence_user_input: Optional[int] = Field(None, ge=1, le=10)
     detection_user_input: Optional[int] = Field(None, ge=1, le=10)
     rpn_user_calculated: Optional[int] = None
     
-    # Suggested Scores from History
+    # Suggested Scores from Historical Design Data
     severity_suggested: Optional[int] = None
     occurrence_suggested: Optional[int] = None
     detection_suggested: Optional[int] = None
@@ -187,14 +198,17 @@ class PFMEAFailureModeEntry(BaseModel):
     justification: Optional[str] = None
     rpn_risk_class: Optional[str] = None
     
-    # Causes and Controls
+    # Design Validation Test Results
+    design_validation_test_results: Optional[dict] = None
+    
+    # Causes and Validation Measures
     causes: List[FailureModeCause] = []
-    controls: List[ProcessControl] = []
+    controls: List[ValidationMeasure] = []
     
     # Canvas Notes
     canvas_notes: Optional[str] = None
 
-# PFMEA Record
+# DFMEA Record (Design FMEA)
 class PFMEARecord(BaseModel):
     id: Optional[int] = None
     part_number: str
@@ -203,20 +217,25 @@ class PFMEARecord(BaseModel):
     customer_name: Optional[str] = None
     process_responsibility: Optional[str] = None
     core_team: List[str] = []
-    domain: Optional[str] = None
+    domain: Optional[str] = None  # ELECTRICAL, MECHANICAL, THERMAL, INTERFACE
     status: Literal["DRAFT", "REVIEW", "APPROVED", "IMPLEMENTATION", "CLOSED"] = "DRAFT"
     format_number: Optional[str] = None
     fmea_date_original: Optional[datetime] = None
+    
+    # Design Phase & Standards
+    design_phase: Literal["CONCEPT", "PRELIMINARY", "DETAILED", "PRODUCTION_DESIGN"] = "DETAILED"
+    design_standards: List[str] = []
     
     # Summary Scores
     overall_rpn: Optional[int] = None
     overall_rpn_average: Optional[float] = None
     
-    # Entries
-    process_steps: List[ProcessStep] = []
+    # Design Functions and Failure Mode Entries
+    process_steps: List[DesignFunction] = []
     entries: List[PFMEAFailureModeEntry] = []
 
-# Historical Incident
+
+# Design Validation Historical Data
 class HistoricalIncident(BaseModel):
     id: int
     part_number: str
@@ -225,6 +244,7 @@ class HistoricalIncident(BaseModel):
     incident_date: datetime
     location: Optional[str] = None
     description: Optional[str] = None
+    design_margin_loss: Optional[float] = None
     severity_actual: Optional[int] = None
     impact_hours: Optional[int] = None
     corrective_action: Optional[str] = None

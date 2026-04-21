@@ -82,10 +82,10 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
     header_font = Font(bold=True, color="FFFFFF", size=12)
     
     cells_to_merge = [
-        ('A', 'M', row)
+        ('A', 'H', row)
     ]
     
-    ws.merge_cells(f'A{row}:I{row}')
+    ws.merge_cells(f'A{row}:H{row}')
     cell = ws[f'A{row}']
     cell.value = part.get('part_name', 'PFMEA Report')
     cell.font = header_font
@@ -115,7 +115,6 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
     
     # ========== Main FMEA Table ==========
     headers = [
-        "Step #",
         "Process Step",
         "Failure Mode",
         "Potential Effect",
@@ -178,7 +177,6 @@ def export_pfmea_to_excel(part_id: int, file_path: str) -> str:
         
         # Row data - simplified to only show user scores and RPN
         row_data = [
-            entry.get('process_step_number'),
             entry.get('process_step_name'),
             entry.get('failure_mode_name'),
             entry.get('potential_effect'),

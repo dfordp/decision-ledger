@@ -102,7 +102,7 @@ def vector_search(
     Args:
         table: Table name to search
         embedding_column: Column name containing embeddings
-        query_embedding: Vector to search for
+        query_embedding: Vector to search for (can be list, array, or string representation)
         limit: Number of results to return
         additional_conditions: Additional WHERE clauses (e.g., "AND dimension_id = %s")
         params: Parameters for additional conditions
@@ -110,8 +110,14 @@ def vector_search(
     Returns:
         List of rows with similarity scores
     """
-    # Convert embedding list to pgvector format
-    embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
+    # Convert embedding to pgvector format string
+    # Handle case where embedding comes from database as string representation
+    if isinstance(query_embedding, str):
+        # Already a string representation from database (e.g., "[0.123, 0.456, ...]")
+        embedding_str = query_embedding
+    else:
+        # Convert list/array to pgvector format
+        embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
     
     query = f"""
         SELECT *,
