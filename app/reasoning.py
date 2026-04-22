@@ -4,7 +4,7 @@ Performs vector similarity search, applies deterministic policy rules,
 and uses Groq for natural language explanations.
 """
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from decimal import Decimal
 import os
 from groq import Groq
@@ -404,3 +404,206 @@ def reason_about_requirement(tender_id: int, dimension_key: str) -> ReasoningRes
     )
     
     return result
+
+
+def perform_ai_evaluation(
+    failure_mode_name: str,
+    user_severity: int,
+    user_occurrence: int = None,
+    user_detection: int = None,
+    historical_incidents: List[Dict[str, Any]] = None,
+    part_specs: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    AI-powered evaluation of FMEA failure mode using Groq.
+    
+    Compares user-entered scores against historical data and generates
+    concise engineering justification via Groq "Senior Lead Engineer" persona.
+    
+    Args:
+        failure_mode_name: Name of the failure mode being evaluated
+        user_severity: User's entered severity score (1-10)
+        user_occurrence: User's entered occurrence score (1-10)
+        user_detection: User's entered detection score (1-10)
+        historical_incidents: List of historical incidents with severity_actual field
+        part_specs: Dict with {part_name, domain, part_number, model_year}
+    
+    Returns:
+        {
+            'evaluation_status': 'SAFE' | 'WARN' | 'BLOCK',
+            'ai_justification': str (2 sentences from Groq),
+            'severity_recommendation': int (1-10),
+            'confidence': float (0-1),
+            'historical_median_severity': int or None
+        }
+    """
+    
+    if historical_incidents is None:
+        historical_incidents = []
+    if part_specs is None:
+        part_specs = {}
+    
+    # Extract historical severities
+    historical_severities = [
+        int(inc.get('severity_actual', 5))
+        for inc in historical_incidents
+        if inc.get('severity_actual') is not None
+    ]
+    
+    similar_incidents_count = len(historical_incidents)
+    
+    # Determine median and status
+    if historical_severities:
+        from statistics import median
+        median_severity = median(historical_severities)
+        min_severity = min(historical_severities)
+        max_severity = max(historical_severities)
+    else:
+        median_severity = None
+        min_severity = None
+        max_severity = None
+    
+    # Determine evaluation status
+    if median_severity is None:
+        # No historical data - default to SAFE
+        evaluation_status = "SAFE"
+        severity_recommendation = user_severity
+        confidence = 0.5
+    else:
+        # Compare user severity to median
+        if user_severity < (median_severity - 3):
+            # Very conservative (more than 3 points below median)
+            evaluation_status = "BLOCK"
+            severity_recommendation = median_severity
+            confidence = 0.9
+        elif user_severity < median_severity:
+            # Below median - flag as warning
+            evaluation_status = "WARN"
+            severity_recommendation = median_severity
+            confidence = 0.7
+        else:
+            # At or above median - safe
+            evaluation_status = "SAFE"
+            severity_recommendation = user_severity
+            confidence = 0.85
+    
+    # Generate AI justification via Groq
+    ai_justification = _generate_severity_justification(
+        failure_mode_name=failure_mode_name,
+        user_severity=user_severity,
+        user_occurrence=user_occurrence,
+        user_detection=user_detection,
+        median_severity=median_severity,
+        min_severity=min_severity,
+        max_severity=max_severity,
+        similar_incidents_count=similar_incidents_count,
+        historical_incidents=historical_incidents,
+        part_specs=part_specs,
+        evaluation_status=evaluation_status
+    )
+    
+    return {
+        'evaluation_status': evaluation_status,
+        'ai_justification': ai_justification,
+        'severity_recommendation': severity_recommendation,
+        'confidence': confidence,
+        'historical_median_severity': median_severity,
+        'similar_incidents_count': similar_incidents_count
+    }
+
+
+def _generate_severity_justification(
+    failure_mode_name: str,
+    user_severity: int,
+    user_occurrence: int,
+    user_detection: int,
+    median_severity: Optional[int],
+    min_severity: Optional[int],
+    max_severity: Optional[int],
+    similar_incidents_count: int,
+    historical_incidents: List[Dict[str, Any]],
+    part_specs: Dict[str, Any],
+    evaluation_status: str
+) -> str:
+    """
+    Generate concise engineering justification from Groq (2 sentences max).
+    Focus: Is the RPN realistic? What risks exist?
+    """
+    
+    # Calculate user's RPN
+    user_rpn = user_severity * user_occurrence * user_detection if (user_severity and user_occurrence and user_detection) else None
+    
+    # Build incident list for context
+    incident_summary = []
+    for inc in historical_incidents[:3]:  # Top 3 only
+        severity = inc.get('severity_actual', 'Unknown')
+        incident_summary.append(f"Severity {severity}")
+    
+    incidents_text = ", ".join(incident_summary) if incident_summary else "No prior data"
+    
+    # Build system prompt - brief and direct
+    system_prompt = """You are a Senior Manufacturing Engineer reviewing FMEA scores.
+Provide a SINGLE, CONCISE sentence assessment (max 20 words).
+Focus only on: (1) Is this RPN realistic given history? (2) What's the key risk?
+Example: "S=6 is low vs history (median 8). Risk: insufficient design margin."
+Be direct, no hedging."""
+    
+    user_message = f"""Failure Mode: {failure_mode_name}
+Part: {part_specs.get('part_name', 'Unknown')} ({part_specs.get('domain', 'Unknown')})
+
+User's Scores: Severity={user_severity}/10, Occurrence={user_occurrence}/10, Detection={user_detection}/10
+User's RPN: {user_rpn if user_rpn else 'N/A'}
+
+Historical: Median Severity={median_severity}, Range {min_severity}-{max_severity}, {similar_incidents_count} incidents ({incidents_text})
+
+Assessment: {evaluation_status}
+
+Judgment (ONE sentence, max 20 words):"""
+    
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.3,
+            max_tokens=50  # Force very short response
+        )
+        
+        justification = response.choices[0].message.content.strip()
+        # Cap at reasonable length
+        if len(justification) > 150:
+            justification = justification[:147] + "..."
+        return justification
+        
+    except Exception as e:
+        # Fallback if Groq fails
+        print(f"⚠️ Groq API failed: {e}")
+        return _generate_fallback_severity_justification(
+            user_severity, user_occurrence, user_detection, median_severity, min_severity, max_severity, evaluation_status
+        )
+
+
+def _generate_fallback_severity_justification(
+    user_severity: int,
+    user_occurrence: int,
+    user_detection: int,
+    median_severity: Optional[int],
+    min_severity: Optional[int],
+    max_severity: Optional[int],
+    evaluation_status: str
+) -> str:
+    """Fallback justification if Groq API is unavailable - concise format"""
+    
+    user_rpn = user_severity * user_occurrence * user_detection
+    
+    if median_severity is None:
+        return "No history. RPN baseline accepted."
+    
+    if evaluation_status == "BLOCK":
+        return f"S={user_severity} << history (median {median_severity}). RPN={user_rpn} likely underestimated."
+    elif evaluation_status == "WARN":
+        return f"S={user_severity} below history (range {min_severity}-{max_severity}). RPN={user_rpn} may underestimate risk."
+    else:
+        return f"S={user_severity} matches history (median {median_severity}). RPN={user_rpn} realistic."

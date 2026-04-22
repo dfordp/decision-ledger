@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vehicle Assembly Hierarchy - DecisionLedger</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .navbar-brand {
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 700;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .navbar-menu {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+        }
+
+        .navbar-menu a {
+            color: white;
+            text-decoration: none;
+            font-weight: 500;
+            transition: opacity 0.2s;
+        }
+
+        .navbar-menu a:hover {
+            opacity: 0.8;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #1a3a52;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 15px;
+        }
+
+        .vehicle-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+        }
+
+        .vehicle-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a3a52;
+        }
+
+        .vehicle-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            background: #667eea;
+            color: white;
+            margin-left: 10px;
+        }
+
+        .badge-secondary {
+            background: #764ba2;
+        }
+
+        .hierarchy-tree {
+            margin-left: 0;
+            border-left: 3px solid #ddd;
+            padding-left: 20px;
+        }
+
+        .system-item {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: white;
+            border-left: 4px solid #667eea;
+            border-radius: 4px;
+        }
+
+        .system-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: #667eea;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .assembly-item {
+            margin-left: 20px;
+            margin-bottom: 15px;
+            padding: 12px;
+            background: #f9f9f9;
+            border-left: 3px solid #764ba2;
+            border-radius: 4px;
+        }
+
+        .assembly-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .part-item {
+            margin-left: 20px;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: white;
+            border-left: 2px solid #999;
+            font-size: 13px;
+            color: #555;
+            border-radius: 3px;
+        }
+
+        .part-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: space-between;
+        }
+
+        .revision-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #10b981;
+            color: white;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+            font-style: italic;
+        }
+
+        .part-number {
+            font-size: 11px;
+            color: #999;
+            display: block;
+            margin-top: 4px;
+        }
+
+        .icon {
+            font-size: 16px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .stat-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            opacity: 0.9;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .no-vehicles {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .no-vehicles p {
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <a href="/" class="navbar-brand">
+            <span>⚖️</span>
+            <span>DecisionLedger</span>
+        </a>
+        <ul class="navbar-menu">
+            <li><a href="/">Home</a></li>
+            <li><a href="/history">History</a></li>
+            <li><a href="/pfmea/select">PFMEA Canvas</a></li>
+            <li><a href="/hierarchy">Hierarchy</a></li>
+        </ul>
+    </div>
+
+    <div class="container">
+        <h1>🚗 Vehicle Assembly Hierarchy</h1>
+
+        {% if vehicles %}
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-value">{{ vehicles|length }}</div>
+                    <div class="stat-label">Vehicles</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ total_systems }}</div>
+                    <div class="stat-label">Systems</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ total_assemblies }}</div>
+                    <div class="stat-label">Assemblies</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ total_parts }}</div>
+                    <div class="stat-label">Parts</div>
+                </div>
+            </div>
+
+            {% for vehicle in vehicles %}
+            <div class="vehicle-card">
+                <div class="vehicle-header">
+                    <div class="vehicle-title">
+                        <span class="icon">🚗</span>
+                        <strong>{{ vehicle.name }}</strong>
+                        <span class="badge">{{ vehicle.category }}</span>
+                        <span class="badge badge-secondary">{{ vehicle.model_year }}</span>
+                    </div>
+                    <div>
+                        <span class="badge">{{ vehicle.system_count }} Systems</span>
+                        <span class="badge badge-secondary">{{ vehicle.total_parts }} Parts</span>
+                    </div>
+                </div>
+
+                {% if vehicle.systems %}
+                <div class="hierarchy-tree">
+                    {% for system in vehicle.systems %}
+                    <div class="system-item">
+                        <div class="system-name">
+                            <span class="icon">📦</span>
+                            <strong>{{ system.name }}</strong>
+                        </div>
+
+                        {% if system.assemblies %}
+                            {% for assembly in system.assemblies %}
+                            <div class="assembly-item">
+                                <div class="assembly-name">
+                                    <span class="icon">🔧</span>
+                                    <strong>{{ assembly.name }}</strong>
+                                    <span style="font-size: 11px; color: #999;">({{ assembly.part_number }})</span>
+                                </div>
+
+                                {% if assembly.parts %}
+                                    {% for part in assembly.parts %}
+                                    <div class="part-item">
+                                        <div class="part-name">
+                                            <div style="flex: 1;">
+                                                <span class="icon">⚙️</span>
+                                                <strong>{{ part.name }}</strong>
+                                                {% if part.part_number %}
+                                                <span class="part-number">{{ part.part_number }}</span>
+                                                {% endif %}
+                                            </div>
+                                            <span class="revision-badge">{{ part.revision_count }} rev{% if part.revision_count != 1 %}s{% endif %}</span>
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                {% else %}
+                                    <div class="empty-state">No parts</div>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="empty-state">No assemblies</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                    <div class="empty-state">No systems configured for this vehicle</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+
+        {% else %}
+            <div class="no-vehicles">
+                <p>📭 No vehicles found</p>
+                <p style="font-size: 14px; opacity: 0.7;">Vehicle hierarchy data will appear here once it's created.</p>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>

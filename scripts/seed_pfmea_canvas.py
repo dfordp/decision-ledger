@@ -410,6 +410,33 @@ def seed_demo_pfmea():
             "impact_hours": 24,
             "action": "Enhanced inspection training, improved lighting in inspection area"
         },
+        {
+            "part_number": "HORN COMP.",
+            "failure_mode": "Housing Crack Under Vibration",
+            "incident_date": datetime(2003, 7, 10).date(),
+            "location": "Manufacturing Plant - Vibration Testing",
+            "severity": 7,
+            "impact_hours": 32,
+            "action": "Increased material thickness, improved damping material in housing"
+        },
+        {
+            "part_number": "HORN COMP.",
+            "failure_mode": "Housing Crack Under Vibration",
+            "incident_date": datetime(2023, 8, 15).date(),
+            "location": "Field Testing - Customer Site A",
+            "severity": 8,
+            "impact_hours": 48,
+            "action": "Redesigned housing geometry with reinforced ribs, field retrofits completed"
+        },
+        {
+            "part_number": "HORN COMP.",
+            "failure_mode": "Housing Crack Under Vibration",
+            "incident_date": datetime(2023, 11, 20).date(),
+            "location": "Manufacturing Plant - Thermal Testing Lab",
+            "severity": 9,
+            "impact_hours": 24,
+            "action": "Implemented CFD thermal interface optimization, extended testing duration"
+        },
     ]
     
     for incident in incidents_data:

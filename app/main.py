@@ -19,7 +19,7 @@ from typing import Optional
 from fastapi.responses import StreamingResponse
 
 from app.database import fetch_all, fetch_one, execute_query, insert_and_return_id
-from app.reasoning import reason_about_requirement
+from app.reasoning import reason_about_requirement, perform_ai_evaluation
 from app.models import DecisionUpdate, ReasoningResult
 from app.document_ingestion import (
     detect_file_type,
@@ -30,6 +30,7 @@ from app.document_ingestion import (
     normalize_document,
     chunk_document
 )
+from app.rpn_suggestion_engine import get_rpn_suggestions
 
 
 # Initialize FastAPI app
@@ -42,6 +43,10 @@ app = FastAPI(
 # In-memory store for decisions (POC - no database persistence)
 # Structure: {tender_id: {dimension_key: {offered_value, justification, saved_at}}}
 decisions_store = {}
+
+# Session-scoped evaluation cache (AI evaluations for PFMEA canvas)
+# Structure: {part_id: {entry_id: {status, justification, timestamp}}}
+evaluation_cache = {}
 
 # Mount static files only if directory exists
 static_dir = "app/static"
@@ -1711,7 +1716,7 @@ async def pfmea_select_part(request: Request):
 
 @app.get("/pfmea/{part_id}/canvas", response_class=HTMLResponse)
 async def pfmea_canvas(request: Request, part_id: int):
-    """FMEA Canvas - Main editing interface"""
+    """FMEA Canvas - Main editing interface with auto-evaluation of all entries"""
     part = fetch_one("SELECT * FROM pfmea_records WHERE id = %s", (part_id,))
     
     if not part:
@@ -1730,10 +1735,62 @@ async def pfmea_canvas(request: Request, part_id: int):
         ORDER BY pfe.process_step_number
     """, (part_id,))
     
+    # Auto-evaluate all entries on canvas load
+    part_specs = {
+        'part_name': part.get('part_name', 'Unknown'),
+        'part_number': part.get('part_number', ''),
+        'material': part.get('material', 'Unknown'),  # May be None - will default in evaluation
+        'environment': part.get('environment', 'Unknown'),  # May be None - will default in evaluation
+        'model_year': part.get('model_year', '')
+    }
+    
+    entries_with_evaluations = []
+    for entry in entries:
+        try:
+            # Get historical incidents for this failure mode
+            suggestions = get_rpn_suggestions(
+                failure_mode_id=entry['failure_mode_id'],
+                part_number=part_specs['part_number'],
+                limit=10
+            )
+            
+            historical_incidents = []
+            if suggestions and 'incidents' in suggestions:
+                historical_incidents = suggestions['incidents']
+            
+            # Perform AI evaluation
+            if entry.get('severity_user_input') and len(historical_incidents) > 0:
+                evaluation_result = perform_ai_evaluation(
+                    failure_mode_name=entry.get('failure_mode_name', 'Unknown'),
+                    user_severity=entry.get('severity_user_input'),
+                    user_occurrence=entry.get('occurrence_user_input'),
+                    user_detection=entry.get('detection_user_input'),
+                    historical_incidents=historical_incidents,
+                    part_specs=part_specs
+                )
+                
+                entry['evaluation_status'] = evaluation_result['evaluation_status']
+                entry['ai_justification'] = evaluation_result['ai_justification']
+                entry['severity_recommendation'] = evaluation_result['severity_recommendation']
+            else:
+                # No user severity or no historical data - default to SAFE
+                entry['evaluation_status'] = 'SAFE'
+                entry['ai_justification'] = 'No historical data or user severity to compare.'
+                entry['severity_recommendation'] = entry.get('severity_user_input', 5)
+                
+        except Exception as e:
+            print(f"⚠️ Evaluation error for entry {entry.get('id')}: {e}")
+            # Graceful fallback - don't break page if evaluation fails
+            entry['evaluation_status'] = 'SAFE'
+            entry['ai_justification'] = 'Evaluation temporarily unavailable.'
+            entry['severity_recommendation'] = entry.get('severity_user_input', 5)
+        
+        entries_with_evaluations.append(entry)
+    
     return templates.TemplateResponse("pfmea_canvas.html", {
         "request": request,
         "part": part,
-        "entries": entries,
+        "entries": entries_with_evaluations,
         "part_id": part_id
     })
 
@@ -1891,7 +1948,7 @@ async def get_process_steps(part_id: int):
 
 @app.get("/api/pfmea/parts/{part_id}/entries")
 async def get_failure_mode_entries(part_id: int):
-    """Get all failure mode entries for a PFMEA record"""
+    """Get all failure mode entries for a PFMEA record with AI evaluations"""
     from app.rpn_suggestion_engine import get_rpn_suggestions, classify_rpn_risk
     
     entries = fetch_all("""
@@ -1906,8 +1963,15 @@ async def get_failure_mode_entries(part_id: int):
         ORDER BY pfe.process_step_number
     """, (part_id,))
     
-    # Enrich with RPN suggestions
-    part = fetch_one("SELECT part_number FROM pfmea_records WHERE id = %s", (part_id,))
+    # Enrich with RPN suggestions and AI evaluations
+    part = fetch_one("SELECT part_number, part_name, domain, model_year FROM pfmea_records WHERE id = %s", (part_id,))
+    
+    part_specs = {
+        'part_name': part.get('part_name', 'Unknown'),
+        'part_number': part.get('part_number', ''),
+        'domain': part.get('domain', 'Unknown'),
+        'model_year': part.get('model_year', '')
+    }
     
     result = []
     for entry in entries:
@@ -1947,6 +2011,39 @@ async def get_failure_mode_entries(part_id: int):
         if rpn:
             entry_dict['rpn_risk_class'] = classify_rpn_risk(rpn)
             entry_dict['rpn_display'] = rpn  # Add explicit display value
+        
+        # ✅ AI Evaluation (new feature)
+        try:
+            historical_incidents = []
+            if suggestions and 'incidents' in suggestions:
+                historical_incidents = suggestions['incidents']
+            
+            # Perform AI evaluation if we have user severity and historical incidents
+            if entry_dict.get('severity_user_input') and len(historical_incidents) > 0:
+                evaluation_result = perform_ai_evaluation(
+                    failure_mode_name=entry.get('failure_mode_name', 'Unknown'),
+                    user_severity=entry_dict.get('severity_user_input'),
+                    user_occurrence=entry_dict.get('occurrence_user_input'),
+                    user_detection=entry_dict.get('detection_user_input'),
+                    historical_incidents=historical_incidents,
+                    part_specs=part_specs
+                )
+                
+                entry_dict['evaluation_status'] = evaluation_result['evaluation_status']
+                entry_dict['ai_justification'] = evaluation_result['ai_justification']
+                entry_dict['severity_recommendation'] = evaluation_result['severity_recommendation']
+            else:
+                # No user severity or no historical data
+                entry_dict['evaluation_status'] = 'SAFE'
+                entry_dict['ai_justification'] = 'No historical data or user severity to compare.'
+                entry_dict['severity_recommendation'] = entry_dict.get('severity_user_input', 5)
+                
+        except Exception as e:
+            # Graceful fallback
+            print(f"⚠️ AI evaluation error for entry {entry.get('id')}: {e}")
+            entry_dict['evaluation_status'] = 'SAFE'
+            entry_dict['ai_justification'] = 'Evaluation temporarily unavailable.'
+            entry_dict['severity_recommendation'] = entry_dict.get('severity_user_input', 5)
         
         result.append(entry_dict)
     
@@ -2184,6 +2281,97 @@ async def list_failure_modes():
     return [dict(m) for m in modes] if modes else []
 
 
+@app.post("/api/v1/evaluate-risk")
+async def evaluate_risk(request: Request):
+    """
+    AI-powered risk evaluation for FMEA failure modes.
+    
+    Uses Groq to compare user's scores (S, O, D) against historical data
+    and generates engineering justification.
+    
+    Request body:
+    {
+        "part_id": int,
+        "entry_id": int,
+        "failure_mode_name": str,
+        "failure_mode_id": int,
+        "user_severity": int (1-10),
+        "user_occurrence": int (1-10),
+        "user_detection": int (1-10),
+        "part_specs": {
+            "part_name": str,
+            "domain": str,
+            "part_number": str,
+            "model_year": str
+        }
+    }
+    """
+    try:
+        data = await request.json()
+        
+        part_id = data.get('part_id')
+        entry_id = data.get('entry_id')
+        failure_mode_name = data.get('failure_mode_name', 'Unknown')
+        failure_mode_id = data.get('failure_mode_id')
+        user_severity = data.get('user_severity', 5)
+        user_occurrence = data.get('user_occurrence', 3)
+        user_detection = data.get('user_detection', 3)
+        part_specs = data.get('part_specs', {})
+        
+        # Validate entry belongs to part
+        entry = fetch_one(
+            "SELECT * FROM pfmea_failure_mode_entries WHERE id = %s AND pfmea_record_id = %s",
+            (entry_id, part_id)
+        )
+        
+        if not entry:
+            raise HTTPException(status_code=404, detail="Entry not found for this part")
+        
+        # Fetch historical incidents for this failure mode
+        suggestions = get_rpn_suggestions(failure_mode_id, part_specs.get('part_number', ''), limit=10)
+        
+        historical_incidents = []
+        if suggestions and 'incidents' in suggestions:
+            historical_incidents = suggestions['incidents']
+        
+        # Call AI evaluation engine with full RPN context
+        evaluation_result = perform_ai_evaluation(
+            failure_mode_name=failure_mode_name,
+            user_severity=user_severity,
+            user_occurrence=user_occurrence,
+            user_detection=user_detection,
+            historical_incidents=historical_incidents,
+            part_specs=part_specs
+        )
+        
+        # Cache the evaluation result in session memory
+        if part_id not in evaluation_cache:
+            evaluation_cache[part_id] = {}
+        
+        evaluation_cache[part_id][entry_id] = {
+            'evaluation_status': evaluation_result['evaluation_status'],
+            'ai_justification': evaluation_result['ai_justification'],
+            'severity_recommendation': evaluation_result['severity_recommendation'],
+            'confidence': evaluation_result['confidence'],
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        # Return evaluation result
+        return JSONResponse({
+            'entry_id': entry_id,
+            'evaluation_status': evaluation_result['evaluation_status'],
+            'ai_justification': evaluation_result['ai_justification'],
+            'severity_recommendation': evaluation_result['severity_recommendation'],
+            'confidence': round(evaluation_result['confidence'], 2),
+            'historical_median_severity': evaluation_result['historical_median_severity'],
+            'similar_incidents_count': evaluation_result['similar_incidents_count']
+        })
+        
+    except Exception as e:
+        print(f"❌ Evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
+
 @app.post("/api/pfmea/canvas/save")
 async def save_pfmea_draft(request: Request):
     """Save PFMEA canvas draft"""
@@ -2255,6 +2443,171 @@ async def export_pfmea_excel(part_id: int):
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# PLM HIERARCHY ENDPOINTS (NEW)
+# ============================================================================
+
+@app.get("/hierarchy", response_class=HTMLResponse)
+async def view_hierarchy(request: Request):
+    """Display hierarchical vehicle → system → assembly → part view"""
+    
+    # Get all vehicles with hierarchy data
+    vehicles_data = fetch_all("""
+        SELECT 
+            v.id, 
+            v.name, 
+            v.category, 
+            v.model_year,
+            COUNT(DISTINCT vs.id) as system_count,
+            SUM(COUNT(DISTINCT p.id)) OVER (PARTITION BY v.id) as total_parts
+        FROM vehicles v
+        LEFT JOIN vehicle_systems vs ON v.id = vs.vehicle_id
+        LEFT JOIN assemblies a ON vs.id = a.system_id
+        LEFT JOIN parts p ON a.id = p.assembly_id
+        GROUP BY v.id, v.name, v.category, v.model_year
+        ORDER BY v.model_year DESC, v.name
+    """)
+    
+    # Build hierarchy structure for template
+    vehicles = []
+    total_systems = 0
+    total_assemblies = 0
+    total_parts = 0
+    
+    if vehicles_data:
+        for vehicle in vehicles_data:
+            # Get systems for this vehicle
+            systems = []
+            systems_data = fetch_all("""
+                SELECT 
+                    vs.id,
+                    vs.system_name as name
+                FROM vehicle_systems vs
+                WHERE vs.vehicle_id = %s
+                ORDER BY vs.system_name
+            """, (vehicle['id'],))
+            
+            if systems_data:
+                for system in systems_data:
+                    total_systems += 1
+                    # Get assemblies for this system
+                    assemblies = []
+                    assemblies_data = fetch_all("""
+                        SELECT 
+                            a.id,
+                            a.assembly_name as name,
+                            a.part_number
+                        FROM assemblies a
+                        WHERE a.system_id = %s
+                        ORDER BY a.assembly_name
+                    """, (system['id'],))
+                    
+                    if assemblies_data:
+                        for assembly in assemblies_data:
+                            total_assemblies += 1
+                            # Get parts for this assembly
+                            parts = []
+                            parts_data = fetch_all("""
+                                SELECT 
+                                    p.id,
+                                    p.part_name as name,
+                                    p.part_number,
+                                    COUNT(pr.id) as revision_count
+                                FROM parts p
+                                LEFT JOIN part_revisions pr ON p.id = pr.part_id
+                                WHERE p.assembly_id = %s
+                                GROUP BY p.id, p.part_name, p.part_number
+                                ORDER BY p.part_name
+                            """, (assembly['id'],))
+                            
+                            if parts_data:
+                                for part in parts_data:
+                                    total_parts += 1
+                                    parts.append(dict(part))
+                            
+                            assemblies.append({
+                                'id': assembly['id'],
+                                'name': assembly['name'],
+                                'part_number': assembly['part_number'],
+                                'parts': parts
+                            })
+                    
+                    systems.append({
+                        'id': system['id'],
+                        'name': system['name'],
+                        'assemblies': assemblies
+                    })
+            
+            vehicles.append({
+                'id': vehicle['id'],
+                'name': vehicle['name'],
+                'category': vehicle['category'],
+                'model_year': vehicle['model_year'],
+                'system_count': vehicle['system_count'],
+                'total_parts': vehicle['total_parts'],
+                'systems': systems
+            })
+    
+    return templates.TemplateResponse("hierarchy_view.html", {
+        "request": request,
+        "vehicles": vehicles,
+        "total_systems": total_systems,
+        "total_assemblies": total_assemblies,
+        "total_parts": total_parts
+    })
+
+
+@app.get("/api/vehicles")
+async def list_vehicles():
+    """Get all vehicles with basic hierarchy counts"""
+    vehicles = fetch_all("""
+        SELECT 
+            v.id, 
+            v.name, 
+            v.category, 
+            v.model_year,
+            COUNT(DISTINCT vs.id) as system_count,
+            SUM(COUNT(DISTINCT p.id)) OVER (PARTITION BY v.id) as total_parts
+        FROM vehicles v
+        LEFT JOIN vehicle_systems vs ON v.id = vs.vehicle_id
+        LEFT JOIN assemblies a ON vs.id = a.system_id
+        LEFT JOIN parts p ON a.id = p.assembly_id
+        GROUP BY v.id, v.name, v.category, v.model_year
+        ORDER BY v.model_year DESC, v.name
+    """)
+    
+    return [dict(v) for v in vehicles] if vehicles else []
+
+
+@app.get("/api/vehicles/{vehicle_id}/hierarchy")
+async def get_vehicle_hierarchy(vehicle_id: str):
+    """Get complete hierarchical view of vehicle (Vehicle → System → Assembly → Part → Revision)"""
+    try:
+        import json
+        # Use the helper function to get JSON hierarchy
+        result = fetch_one("""
+            SELECT get_vehicle_hierarchy(%s::uuid)
+        """, (vehicle_id,))
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+        
+        # Extract the JSONB column (it's named 'get_vehicle_hierarchy' due to the function name)
+        hierarchy_json = result.get('get_vehicle_hierarchy')
+        if hierarchy_json is None:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+        
+        # If it's already a dict (JSONB parsed), return it; otherwise parse it
+        if isinstance(hierarchy_json, dict):
+            return hierarchy_json
+        else:
+            return json.loads(hierarchy_json)
+        
+    except Exception as e:
+        print(f"Error getting hierarchy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -207,6 +207,10 @@ class PFMEAFailureModeEntry(BaseModel):
     
     # Canvas Notes
     canvas_notes: Optional[str] = None
+    
+    # AI Evaluation (Groq-powered risk assessment)
+    evaluation_status: Optional[Literal["SAFE", "WARN", "BLOCK"]] = None
+    ai_justification: Optional[str] = None
 
 # DFMEA Record (Design FMEA)
 class PFMEARecord(BaseModel):
@@ -270,3 +274,123 @@ class RPNSuggestion(BaseModel):
     rpn_suggested: Optional[int] = None
     similar_incident_count: int = 0
     incidents: List[HistoricalIncident] = []
+
+
+# ============================================================================
+# HIERARCHICAL PLM MODELS (Vehicle → System → Assembly → Part → Revision)
+# ============================================================================
+
+# Part Revision (version control for parts)
+class PartRevision(BaseModel):
+    id: Optional[str] = None
+    part_id: str
+    revision_number: int
+    change_type: Literal["design_change", "material_substitution", "supplier_change", "baseline_migration"] = "design_change"
+    previous_specs_json: Optional[dict] = None
+    new_specs_json: dict = Field(description="Full spec snapshot")
+    change_description: Optional[str] = None
+    changed_by: str = "system"
+    change_date: Optional[datetime] = None
+    approval_status: Literal["draft", "approved", "rejected"] = "draft"
+    created_at: Optional[datetime] = None
+
+# Revision Impact Analysis (AI-generated)
+class RevisionImpactAnalysis(BaseModel):
+    id: Optional[str] = None
+    part_revision_id: str
+    analysis_json: dict = Field(description="Groq analysis output: {updated_failures, new_risks, mitigations}")
+    previous_rpn_median: Optional[float] = None
+    new_rpn_estimate: Optional[float] = None
+    rpn_delta: Optional[float] = None
+    confidence_score: int = Field(default=0, ge=0, le=100)
+    analysis_timestamp: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+# Part (leaf node in hierarchy)
+class Part(BaseModel):
+    id: Optional[str] = None
+    assembly_id: str
+    part_name: str
+    part_number: Optional[str] = None
+    supplier: Optional[str] = None
+    material: Optional[str] = None
+    cost: Optional[float] = None
+    mass: Optional[float] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    
+    # Related data
+    revisions: List[PartRevision] = Field(default_factory=list, description="All revisions of this part")
+    revision_count: int = 0
+    latest_revision: Optional[PartRevision] = None
+
+# Assembly (groups related parts)
+class Assembly(BaseModel):
+    id: Optional[str] = None
+    system_id: str
+    assembly_name: str
+    part_number: str = Field(description="Unique assembly identifier")
+    description: Optional[str] = None
+    part_owner_team: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    
+    # Related data
+    parts: List[Part] = Field(default_factory=list)
+    part_count: int = 0
+
+# Vehicle System (e.g., Electrical, Powertrain)
+class VehicleSystem(BaseModel):
+    id: Optional[str] = None
+    vehicle_id: str
+    system_name: str
+    description: Optional[str] = None
+    sequence_order: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    
+    # Related data
+    assemblies: List[Assembly] = Field(default_factory=list)
+    assembly_count: int = 0
+
+# Vehicle (top-level container)
+class Vehicle(BaseModel):
+    id: Optional[str] = None
+    name: str
+    category: Literal["automotive", "commercial", "industrial", "electronics"]
+    model_year: Optional[int] = None
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    
+    # Related data
+    systems: List[VehicleSystem] = Field(default_factory=list)
+    system_count: int = 0
+    total_assemblies: int = 0
+    total_parts: int = 0
+
+# Nested full hierarchy (for tree view)
+class VehicleHierarchy(BaseModel):
+    id: Optional[str] = None
+    name: str
+    model_year: Optional[int] = None
+    category: str
+    systems: List[VehicleSystem] = Field(default_factory=list)
+    total_parts: int = 0
+    total_revisions: int = 0
+
+# Create Revision Request
+class CreateRevisionRequest(BaseModel):
+    change_type: Literal["design_change", "material_substitution", "supplier_change"] = "design_change"
+    change_description: str = Field(description="Reason for this revision")
+    new_specs_json: dict = Field(description="New part specifications")
+    changed_by: str = "current_user"
+
+# Revision Comparison Response
+class RevisionComparison(BaseModel):
+    part_id: str
+    part_name: str
+    old_revision: PartRevision
+    new_revision: PartRevision
+    changes: dict = Field(description="Diff of old vs new specs")
+    impact_analysis: Optional[RevisionImpactAnalysis] = None
