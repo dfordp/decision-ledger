@@ -171,6 +171,31 @@
             justify-content: space-between;
         }
 
+        .part-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+
+        .part-action {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            text-decoration: none;
+            background: #e0e7ff;
+            color: #3730a3;
+        }
+
+        .part-action-primary {
+            background: #dbeafe;
+            color: #1d4ed8;
+        }
+
         .revision-badge {
             display: inline-block;
             padding: 3px 8px;
@@ -320,8 +345,19 @@
                                                 {% if part.part_number %}
                                                 <span class="part-number">{{ part.part_number }}</span>
                                                 {% endif %}
+                                                <div class="part-actions">
+                                                    <a class="part-action part-action-primary" href="/parts/{{ part.id }}">View Part</a>
+                                                    {% if part.active_pfmea_id %}
+                                                    <a class="part-action" href="/pfmea/{{ part.active_pfmea_id }}/canvas">Open DFMEA</a>
+                                                    {% endif %}
+                                                </div>
                                             </div>
-                                            <span class="revision-badge">{{ part.revision_count }} rev{% if part.revision_count != 1 %}s{% endif %}</span>
+                                            <span class="revision-badge">
+                                                {{ part.revision_count }} rev{% if part.revision_count != 1 %}s{% endif %}
+                                                {% if part.latest_revision_number %}
+                                                · latest r{{ part.latest_revision_number }}
+                                                {% endif %}
+                                            </span>
                                         </div>
                                     </div>
                                     {% endfor %}

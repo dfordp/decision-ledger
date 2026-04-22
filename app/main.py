@@ -5,6 +5,7 @@ All decisions stored in memory (no database persistence for POC).
 """
 
 from datetime import datetime
+import json
 import os
 import re
 import tempfile
@@ -31,6 +32,11 @@ from app.document_ingestion import (
     chunk_document
 )
 from app.rpn_suggestion_engine import get_rpn_suggestions
+from app.revision_analysis import (
+    analyze_revision_with_groq,
+    diff_revision_specs,
+    map_changes_to_functions,
+)
 
 
 # Initialize FastAPI app
@@ -2450,6 +2456,33 @@ async def export_pfmea_excel(part_id: int):
 # PLM HIERARCHY ENDPOINTS (NEW)
 # ============================================================================
 
+def _build_part_family_patterns(part_number: Optional[str]) -> list[str]:
+    """Build simple part-family search patterns from a part number."""
+    if not part_number:
+        return []
+
+    patterns = [part_number]
+    for separator in ("-", "_", " "):
+        if separator in part_number:
+            root = part_number.split(separator)[0]
+            if root and root != part_number:
+                patterns.append(f"{root}%")
+            break
+
+    return patterns
+
+
+def _summarize_review_note(entry_actions: list[dict], entry_name: str) -> Optional[str]:
+    """Find a matching review note from revision analysis for a carried-forward entry."""
+    normalized_name = (entry_name or "").lower()
+    for action in entry_actions or []:
+        failure_mode = (action.get("failure_mode") or "").lower()
+        if failure_mode and failure_mode in normalized_name:
+            fields = ", ".join(action.get("fields_to_review") or [])
+            suffix = f" Review: {fields}." if fields else ""
+            return f"{action.get('action', 'REVIEW_REQUIRED')}: {action.get('reason', 'Revision change impact identified.')}{suffix}"
+    return None
+
 @app.get("/hierarchy", response_class=HTMLResponse)
 async def view_hierarchy(request: Request):
     """Display hierarchical vehicle → system → assembly → part view"""
@@ -2515,7 +2548,23 @@ async def view_hierarchy(request: Request):
                                     p.id,
                                     p.part_name as name,
                                     p.part_number,
-                                    COUNT(pr.id) as revision_count
+                                    COUNT(pr.id) as revision_count,
+                                    COALESCE(MAX(pr.revision_number), 0) as latest_revision_number,
+                                    (
+                                        SELECT pr_latest.id
+                                        FROM part_revisions pr_latest
+                                        WHERE pr_latest.part_id = p.id
+                                        ORDER BY pr_latest.revision_number DESC, pr_latest.change_date DESC
+                                        LIMIT 1
+                                    ) as latest_revision_id,
+                                    (
+                                        SELECT pf.id
+                                        FROM pfmea_records pf
+                                        LEFT JOIN part_revisions pr_link ON pf.part_revision_id = pr_link.id
+                                        WHERE pr_link.part_id = p.id OR (p.part_number IS NOT NULL AND pf.part_number = p.part_number)
+                                        ORDER BY pf.updated_at DESC NULLS LAST, pf.created_at DESC
+                                        LIMIT 1
+                                    ) as active_pfmea_id
                                 FROM parts p
                                 LEFT JOIN part_revisions pr ON p.id = pr.part_id
                                 WHERE p.assembly_id = %s
@@ -2557,6 +2606,680 @@ async def view_hierarchy(request: Request):
         "total_systems": total_systems,
         "total_assemblies": total_assemblies,
         "total_parts": total_parts
+    })
+
+
+@app.get("/parts/{part_id}", response_class=HTMLResponse)
+async def part_detail(request: Request, part_id: str):
+    """Detailed part page with revisions, DFMEA drafts, and historical context."""
+    part = fetch_one("""
+        SELECT
+            p.*,
+            a.assembly_name,
+            a.part_number as assembly_part_number,
+            vs.system_name,
+            v.name as vehicle_name,
+            v.model_year as vehicle_model_year,
+            v.category as vehicle_category
+        FROM parts p
+        JOIN assemblies a ON p.assembly_id = a.id
+        JOIN vehicle_systems vs ON a.system_id = vs.id
+        JOIN vehicles v ON vs.vehicle_id = v.id
+        WHERE p.id = %s::uuid
+    """, (part_id,))
+
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+
+    revisions = fetch_all("""
+        SELECT
+            pr.*,
+            ria.analysis_json,
+            ria.confidence_score,
+            ria.analysis_timestamp
+        FROM part_revisions pr
+        LEFT JOIN revision_impact_analysis ria ON ria.part_revision_id = pr.id
+        WHERE pr.part_id = %s::uuid
+        ORDER BY pr.revision_number DESC, pr.change_date DESC
+    """, (part_id,))
+
+    dfmea_records = fetch_all("""
+        SELECT
+            pf.id,
+            pf.part_name,
+            pf.part_number,
+            pf.status,
+            pf.design_phase,
+            pf.overall_rpn,
+            pf.overall_rpn_average,
+            pf.part_revision_id,
+            pr.revision_number,
+            pf.updated_at,
+            pf.created_at
+        FROM pfmea_records pf
+        LEFT JOIN part_revisions pr ON pf.part_revision_id = pr.id
+        WHERE (pr.part_id = %s::uuid) OR (pf.part_number = %s)
+        ORDER BY pf.updated_at DESC NULLS LAST, pf.created_at DESC
+    """, (part_id, part.get("part_number")))
+
+    family_patterns = _build_part_family_patterns(part.get("part_number"))
+    incidents: list[dict] = []
+    if family_patterns:
+        incident_rows: list[dict] = []
+        for pattern in family_patterns[:2]:
+            incident_rows.extend(fetch_all("""
+                SELECT
+                    hi.id,
+                    hi.part_number,
+                    hi.incident_date,
+                    hi.location,
+                    hi.description,
+                    hi.severity_actual,
+                    hi.impact_hours,
+                    hi.corrective_action,
+                    fmt.canonical_name as failure_mode_name
+                FROM historical_incidents hi
+                LEFT JOIN failure_mode_taxonomy fmt ON hi.failure_mode_id = fmt.id
+                WHERE hi.part_number = %s OR hi.part_number LIKE %s
+                ORDER BY hi.incident_date DESC
+                LIMIT 8
+            """, (part.get("part_number"), pattern)))
+
+        seen_incident_ids = set()
+        for incident in incident_rows:
+            if incident["id"] in seen_incident_ids:
+                continue
+            seen_incident_ids.add(incident["id"])
+            incidents.append(incident)
+            if len(incidents) >= 8:
+                break
+
+    active_dfmea = dfmea_records[0] if dfmea_records else None
+    initial_specs = revisions[0].get("new_specs_json") if revisions else {
+        "material": part.get("material"),
+        "supplier": part.get("supplier"),
+        "critical_dimensions": {},
+        "validation_notes": {},
+    }
+
+    return templates.TemplateResponse("part_detail.html", {
+        "request": request,
+        "part": part,
+        "revisions": revisions,
+        "dfmea_records": dfmea_records,
+        "active_dfmea": active_dfmea,
+        "incidents": incidents,
+        "initial_specs": initial_specs,
+    })
+
+
+@app.post("/api/parts/{part_id}/revisions")
+async def create_part_revision(part_id: str, request: Request):
+    """Create a new revision snapshot for a hierarchy part."""
+    data = await request.json()
+
+    part = fetch_one("""
+        SELECT id, part_name, part_number
+        FROM parts
+        WHERE id = %s::uuid
+    """, (part_id,))
+
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+
+    latest_revision = fetch_one("""
+        SELECT revision_number, new_specs_json
+        FROM part_revisions
+        WHERE part_id = %s::uuid
+        ORDER BY revision_number DESC, change_date DESC
+        LIMIT 1
+    """, (part_id,))
+
+    next_revision_number = (latest_revision["revision_number"] if latest_revision else 0) + 1
+    previous_specs = latest_revision["new_specs_json"] if latest_revision else {}
+
+    revision = fetch_one("""
+        INSERT INTO part_revisions (
+            part_id,
+            revision_number,
+            change_type,
+            previous_specs_json,
+            new_specs_json,
+            change_description,
+            changed_by,
+            approval_status
+        )
+        VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, 'draft')
+        RETURNING id, revision_number, change_date
+    """, (
+        part_id,
+        next_revision_number,
+        data.get("change_type", "design_change"),
+        Json(previous_specs or {}),
+        Json(data.get("new_specs_json", {})),
+        data.get("change_description", ""),
+        data.get("changed_by", "system"),
+    ))
+
+    return JSONResponse({
+        "id": revision["id"],
+        "part_id": part_id,
+        "revision_number": revision["revision_number"],
+        "change_date": revision["change_date"].isoformat() if revision.get("change_date") else None,
+        "message": f"Created revision {revision['revision_number']} for {part['part_name']}",
+    })
+
+
+@app.post("/api/revisions/{revision_id}/analyze-dfmea")
+async def analyze_revision_for_dfmea(revision_id: str):
+    """Analyze a part revision and return DFMEA-focused impact guidance."""
+    revision = fetch_one("""
+        SELECT
+            pr.*,
+            p.part_name,
+            p.part_number,
+            p.material,
+            p.supplier,
+            a.assembly_name,
+            vs.system_name,
+            v.name as vehicle_name,
+            v.model_year as vehicle_model_year,
+            v.category as vehicle_category
+        FROM part_revisions pr
+        JOIN parts p ON pr.part_id = p.id
+        JOIN assemblies a ON p.assembly_id = a.id
+        JOIN vehicle_systems vs ON a.system_id = vs.id
+        JOIN vehicles v ON vs.vehicle_id = v.id
+        WHERE pr.id = %s::uuid
+    """, (revision_id,))
+
+    if not revision:
+        raise HTTPException(status_code=404, detail="Revision not found")
+
+    process_steps = fetch_all("""
+        SELECT step_number, step_name, function_hierarchy, design_intent, critical_parameters
+        FROM process_steps
+        WHERE pfmea_record_id = (
+            SELECT pf.id
+            FROM pfmea_records pf
+            LEFT JOIN part_revisions pr_link ON pf.part_revision_id = pr_link.id
+            WHERE pr_link.part_id = %s::uuid OR pf.part_number = %s
+            ORDER BY pf.updated_at DESC NULLS LAST, pf.created_at DESC
+            LIMIT 1
+        )
+        ORDER BY step_number
+    """, (revision["part_id"], revision.get("part_number")))
+
+    prior_entries = fetch_all("""
+        SELECT
+            pfe.id,
+            pfe.process_step_number,
+            fm.canonical_name as failure_mode_name,
+            pfe.potential_effect,
+            pfe.severity_user_input,
+            pfe.occurrence_user_input,
+            pfe.detection_user_input,
+            pfe.canvas_notes
+        FROM pfmea_failure_mode_entries pfe
+        JOIN failure_mode_taxonomy fm ON pfe.failure_mode_id = fm.id
+        WHERE pfe.pfmea_record_id = (
+            SELECT pf.id
+            FROM pfmea_records pf
+            LEFT JOIN part_revisions pr_link ON pf.part_revision_id = pr_link.id
+            WHERE pr_link.part_id = %s::uuid OR pf.part_number = %s
+            ORDER BY pf.updated_at DESC NULLS LAST, pf.created_at DESC
+            LIMIT 1
+        )
+        ORDER BY pfe.process_step_number, pfe.id
+    """, (revision["part_id"], revision.get("part_number")))
+
+    family_patterns = _build_part_family_patterns(revision.get("part_number"))
+    incidents: list[dict] = []
+    if family_patterns:
+        for pattern in family_patterns[:2]:
+            incidents.extend(fetch_all("""
+                SELECT
+                    hi.id,
+                    hi.part_number,
+                    hi.incident_date,
+                    hi.location,
+                    hi.description,
+                    hi.design_margin_loss,
+                    hi.severity_actual,
+                    hi.impact_hours,
+                    hi.corrective_action,
+                    fmt.canonical_name as failure_mode_name
+                FROM historical_incidents hi
+                LEFT JOIN failure_mode_taxonomy fmt ON hi.failure_mode_id = fmt.id
+                WHERE hi.part_number = %s OR hi.part_number LIKE %s
+                ORDER BY hi.incident_date DESC
+                LIMIT 10
+            """, (revision.get("part_number"), pattern)))
+
+    deduped_incidents: list[dict] = []
+    incident_ids = set()
+    for incident in incidents:
+        if incident["id"] in incident_ids:
+            continue
+        incident_ids.add(incident["id"])
+        deduped_incidents.append(incident)
+
+    old_specs = revision.get("previous_specs_json") or {}
+    new_specs = revision.get("new_specs_json") or {}
+    changes = diff_revision_specs(old_specs, new_specs)
+    mapped_functions = map_changes_to_functions(changes, process_steps)
+
+    analysis = analyze_revision_with_groq(
+        part_context={
+            "part_id": str(revision["part_id"]),
+            "part_name": revision.get("part_name"),
+            "part_number": revision.get("part_number"),
+            "material": revision.get("material"),
+            "supplier": revision.get("supplier"),
+            "assembly_name": revision.get("assembly_name"),
+            "system_name": revision.get("system_name"),
+            "vehicle_name": revision.get("vehicle_name"),
+            "vehicle_model_year": revision.get("vehicle_model_year"),
+            "vehicle_category": revision.get("vehicle_category"),
+            "revision_number": revision.get("revision_number"),
+        },
+        old_specs=old_specs,
+        new_specs=new_specs,
+        changes=changes,
+        mapped_functions=mapped_functions,
+        prior_entries=prior_entries,
+        incidents=deduped_incidents,
+    )
+
+    existing_analysis = fetch_one("""
+        SELECT id FROM revision_impact_analysis WHERE part_revision_id = %s::uuid
+    """, (revision_id,))
+
+    if existing_analysis:
+        execute_query("""
+            UPDATE revision_impact_analysis
+            SET analysis_json = %s,
+                confidence_score = %s,
+                analysis_timestamp = NOW()
+            WHERE id = %s::uuid
+        """, (
+            Json(analysis),
+            analysis.get("confidence_score", 0),
+            existing_analysis["id"],
+        ))
+        analysis_id = existing_analysis["id"]
+    else:
+        analysis_row = fetch_one("""
+            INSERT INTO revision_impact_analysis (
+                part_revision_id,
+                analysis_json,
+                confidence_score
+            )
+            VALUES (%s::uuid, %s, %s)
+            RETURNING id
+        """, (
+            revision_id,
+            Json(analysis),
+            analysis.get("confidence_score", 0),
+        ))
+        analysis_id = analysis_row["id"]
+
+    return JSONResponse({
+        "id": analysis_id,
+        "revision_id": revision_id,
+        "changes": changes,
+        "analysis": analysis,
+    })
+
+
+@app.post("/api/revisions/{revision_id}/generate-dfmea-draft")
+async def generate_dfmea_draft_from_revision(revision_id: str):
+    """Create a new DFMEA draft linked to a part revision using the closest prior draft."""
+    revision = fetch_one("""
+        SELECT
+            pr.*,
+            p.id as part_uuid,
+            p.part_name,
+            p.part_number,
+            a.part_number as assembly_part_number,
+            v.model_year as vehicle_model_year
+        FROM part_revisions pr
+        JOIN parts p ON pr.part_id = p.id
+        JOIN assemblies a ON p.assembly_id = a.id
+        JOIN vehicle_systems vs ON a.system_id = vs.id
+        JOIN vehicles v ON vs.vehicle_id = v.id
+        WHERE pr.id = %s::uuid
+    """, (revision_id,))
+
+    if not revision:
+        raise HTTPException(status_code=404, detail="Revision not found")
+
+    existing_pfmea = fetch_one("""
+        SELECT id FROM pfmea_records WHERE part_revision_id = %s::uuid
+    """, (revision_id,))
+    if existing_pfmea:
+        return JSONResponse({
+            "id": existing_pfmea["id"],
+            "message": "DFMEA draft already exists for this revision",
+            "redirect_url": f"/pfmea/{existing_pfmea['id']}/canvas",
+        })
+
+    previous_revision = fetch_one("""
+        SELECT id, revision_number
+        FROM part_revisions
+        WHERE part_id = %s::uuid AND revision_number < %s
+        ORDER BY revision_number DESC
+        LIMIT 1
+    """, (revision["part_id"], revision["revision_number"]))
+
+    if previous_revision:
+        source_pfmea = fetch_one("""
+            SELECT *
+            FROM pfmea_records
+            WHERE part_revision_id = %s::uuid
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        """, (previous_revision["id"],))
+    else:
+        source_pfmea = None
+
+    if not source_pfmea:
+        source_pfmea = fetch_one("""
+            SELECT *
+            FROM pfmea_records
+            WHERE part_number = %s
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        """, (revision.get("part_number"),))
+
+    analysis_row = fetch_one("""
+        SELECT analysis_json
+        FROM revision_impact_analysis
+        WHERE part_revision_id = %s::uuid
+        ORDER BY analysis_timestamp DESC NULLS LAST, created_at DESC
+        LIMIT 1
+    """, (revision_id,))
+    analysis_json = analysis_row.get("analysis_json") if analysis_row else {}
+    entry_actions = analysis_json.get("entry_actions", []) if isinstance(analysis_json, dict) else []
+    resolved_part_number = (
+        (source_pfmea or {}).get("part_number")
+        or revision.get("part_number")
+        or revision.get("assembly_part_number")
+        or f"PART-{str(revision.get('part_uuid')).split('-')[0].upper()}"
+    )
+    resolved_model_year = (source_pfmea or {}).get("model_year") or revision.get("vehicle_model_year")
+
+    new_pfmea = fetch_one("""
+        INSERT INTO pfmea_records (
+            part_number,
+            part_name,
+            model_year,
+            customer_name,
+            process_responsibility,
+            core_team,
+            domain,
+            status,
+            format_number,
+            fmea_date_original,
+            design_phase,
+            design_standards,
+            canvas_state,
+            part_revision_id
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'DRAFT', %s, CURRENT_DATE, %s, %s, %s, %s::uuid)
+        RETURNING id
+    """, (
+        resolved_part_number,
+        (source_pfmea or {}).get("part_name") or revision.get("part_name"),
+        resolved_model_year,
+        (source_pfmea or {}).get("customer_name"),
+        (source_pfmea or {}).get("process_responsibility") or "system",
+        (source_pfmea or {}).get("core_team") or [],
+        (source_pfmea or {}).get("domain"),
+        f"REV-{resolved_part_number}-{revision.get('revision_number')}",
+        (source_pfmea or {}).get("design_phase") or "DETAILED",
+        (source_pfmea or {}).get("design_standards") or [],
+        Json({
+            "draft_origin": "generated_from_revision" if source_pfmea else "initial_from_revision",
+            "source_pfmea_id": source_pfmea["id"] if source_pfmea else None,
+            "source_revision_id": str(previous_revision["id"]) if previous_revision else None,
+            "target_revision_id": revision_id,
+            "revision_analysis": analysis_json,
+        }),
+        revision_id,
+    ))
+    new_pfmea_id = new_pfmea["id"]
+
+    if not source_pfmea:
+        inferred_parameters = sorted((revision.get("new_specs_json") or {}).keys())
+        starter_step = fetch_one("""
+            INSERT INTO process_steps (
+                pfmea_record_id,
+                step_number,
+                step_name,
+                function_hierarchy,
+                design_intent,
+                critical_parameters
+            )
+            VALUES (%s, 10, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            new_pfmea_id,
+            revision.get("part_name"),
+            revision.get("part_name"),
+            f"Initial DFMEA draft generated for revision {revision.get('revision_number')}",
+            Json(inferred_parameters),
+        ))
+
+        candidate_modes = analysis_json.get("new_failure_candidates", []) if isinstance(analysis_json, dict) else []
+        if not candidate_modes:
+            candidate_modes = [{
+                "failure_mode_name": f"Revision impact review for {revision.get('part_name')}",
+                "reason": "Starter DFMEA entry created because no prior DFMEA record existed for this part.",
+                "suggested_severity": 5,
+            }]
+
+        for candidate in candidate_modes[:5]:
+            taxonomy = fetch_one("""
+                SELECT id
+                FROM failure_mode_taxonomy
+                WHERE LOWER(canonical_name) = LOWER(%s)
+            """, (candidate.get("failure_mode_name"),))
+
+            if not taxonomy:
+                taxonomy = fetch_one("""
+                    INSERT INTO failure_mode_taxonomy (
+                        canonical_name,
+                        category,
+                        description,
+                        aliases
+                    )
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    candidate.get("failure_mode_name"),
+                    "OTHER",
+                    candidate.get("reason"),
+                    [],
+                ))
+
+            severity = candidate.get("suggested_severity") or 5
+            occurrence = 3
+            detection = 3
+            execute_query("""
+                INSERT INTO pfmea_failure_mode_entries (
+                    pfmea_record_id,
+                    process_step_id,
+                    process_step_number,
+                    failure_mode_id,
+                    severity_user_input,
+                    occurrence_user_input,
+                    detection_user_input,
+                    rpn_user_calculated,
+                    potential_effect,
+                    canvas_notes
+                )
+                VALUES (%s, %s, 10, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                new_pfmea_id,
+                starter_step["id"],
+                taxonomy["id"],
+                severity,
+                occurrence,
+                detection,
+                severity * occurrence * detection,
+                candidate.get("reason") or "Initial candidate derived from revision analysis.",
+                "Starter draft entry generated from revision analysis.",
+            ))
+
+        return JSONResponse({
+            "id": new_pfmea_id,
+            "message": "Generated starter DFMEA draft for a part with no prior DFMEA record",
+            "redirect_url": f"/pfmea/{new_pfmea_id}/canvas",
+        })
+
+    source_steps = fetch_all("""
+        SELECT *
+        FROM process_steps
+        WHERE pfmea_record_id = %s
+        ORDER BY step_number
+    """, (source_pfmea["id"],))
+
+    step_map = {}
+    for step in source_steps:
+        new_step = fetch_one("""
+            INSERT INTO process_steps (
+                pfmea_record_id,
+                step_number,
+                step_name,
+                function_hierarchy,
+                design_intent,
+                critical_parameters
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            new_pfmea_id,
+            step.get("step_number"),
+            step.get("step_name"),
+            step.get("function_hierarchy"),
+            step.get("design_intent"),
+            Json(step.get("critical_parameters") or []),
+        ))
+        step_map[step["id"]] = new_step["id"]
+
+    source_entries = fetch_all("""
+        SELECT
+            pfe.*,
+            fmt.canonical_name as failure_mode_name
+        FROM pfmea_failure_mode_entries pfe
+        JOIN failure_mode_taxonomy fmt ON pfe.failure_mode_id = fmt.id
+        WHERE pfe.pfmea_record_id = %s
+        ORDER BY pfe.process_step_number, pfe.id
+    """, (source_pfmea["id"],))
+
+    for entry in source_entries:
+        review_note = _summarize_review_note(entry_actions, entry.get("failure_mode_name"))
+        combined_notes = "\n".join(filter(None, [review_note, entry.get("canvas_notes")]))
+
+        new_entry = fetch_one("""
+            INSERT INTO pfmea_failure_mode_entries (
+                pfmea_record_id,
+                process_step_id,
+                process_step_number,
+                failure_mode_id,
+                severity_user_input,
+                occurrence_user_input,
+                detection_user_input,
+                rpn_user_calculated,
+                severity_suggested,
+                occurrence_suggested,
+                detection_suggested,
+                rpn_suggested,
+                similar_incidents_count,
+                rpn_risk_class,
+                potential_effect,
+                justification,
+                source_excerpt,
+                canvas_notes,
+                design_validation_test_results
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            new_pfmea_id,
+            step_map.get(entry.get("process_step_id")),
+            entry.get("process_step_number"),
+            entry.get("failure_mode_id"),
+            entry.get("severity_user_input"),
+            entry.get("occurrence_user_input"),
+            entry.get("detection_user_input"),
+            entry.get("rpn_user_calculated"),
+            entry.get("severity_suggested"),
+            entry.get("occurrence_suggested"),
+            entry.get("detection_suggested"),
+            entry.get("rpn_suggested"),
+            entry.get("similar_incidents_count", 0),
+            entry.get("rpn_risk_class"),
+            entry.get("potential_effect"),
+            entry.get("justification"),
+            entry.get("source_excerpt"),
+            combined_notes or None,
+            Json(entry.get("design_validation_test_results") or {}),
+        ))
+
+        causes = fetch_all("""
+            SELECT * FROM failure_mode_causes WHERE fmea_entry_id = %s ORDER BY cause_sequence
+        """, (entry["id"],))
+        for cause in causes:
+            execute_query("""
+                INSERT INTO failure_mode_causes (
+                    fmea_entry_id,
+                    cause_sequence,
+                    canonical_cause,
+                    cause_category,
+                    description,
+                    design_margin_loss,
+                    safety_factor_assumed
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                new_entry["id"],
+                cause.get("cause_sequence", 1),
+                cause.get("canonical_cause"),
+                cause.get("cause_category"),
+                cause.get("description"),
+                cause.get("design_margin_loss"),
+                cause.get("safety_factor_assumed"),
+            ))
+
+        controls = fetch_all("""
+            SELECT * FROM process_controls WHERE fmea_entry_id = %s ORDER BY id
+        """, (entry["id"],))
+        for control in controls:
+            execute_query("""
+                INSERT INTO process_controls (
+                    fmea_entry_id,
+                    control_type,
+                    control_description,
+                    test_method,
+                    effectiveness_percent,
+                    test_results_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                new_entry["id"],
+                control.get("control_type"),
+                control.get("control_description"),
+                control.get("test_method"),
+                control.get("effectiveness_percent"),
+                Json(control.get("test_results_json") or {}),
+            ))
+
+    return JSONResponse({
+        "id": new_pfmea_id,
+        "message": "Generated DFMEA draft from prior revision context",
+        "redirect_url": f"/pfmea/{new_pfmea_id}/canvas",
     })
 
 
