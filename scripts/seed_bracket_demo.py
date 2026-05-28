@@ -120,17 +120,24 @@ def _step(n: int, text: str) -> None:
 
 
 def wipe_existing_data() -> None:
-    """Remove all existing HORN-HSG-2705 data from the database."""
+    """
+    Remove revision-level data for HORN-HSG-2705 without deleting the artifact.
+
+    Preserving the artifact keeps its UUID stable — page URLs and bookmarks
+    remain valid across reseeds.  Only revisions (and their dependent drawing
+    entities, dimensions, annotations, validation results, sessions, etc.) are
+    cleared.
+    """
     artifact = fetch_one(
         "SELECT id FROM design_artifacts WHERE artifact_number = 'HORN-HSG-2705'"
     )
     if not artifact:
-        print("    No existing artifact found — nothing to wipe.")
+        print("    No existing artifact found — will be created fresh.")
         return
 
     artifact_id = str(artifact["id"])
+    print(f"    Artifact ID (preserved): {artifact_id}")
 
-    # Revisions that currently exist (to delete sessions that reference them)
     revision_ids = fetch_all(
         "SELECT id FROM design_revisions WHERE artifact_id = %s::uuid",
         (artifact_id,),
@@ -138,24 +145,25 @@ def wipe_existing_data() -> None:
 
     if revision_ids:
         id_list = ", ".join(f"'{str(r['id'])}'" for r in revision_ids)
-        # Sessions use SET NULL on revision FK — must delete them explicitly
-        # (cascade will clean up findings, evidence, items, rule_results, audit_log)
+        # engineering_review_sessions uses SET NULL on revision FK deletion,
+        # so sessions must be deleted explicitly before revisions are dropped.
+        # Cascade then cleans up findings, evidence, items, rule_results, audit_log.
         execute_query(
             f"DELETE FROM engineering_review_sessions "
             f"WHERE design_revision_id IN ({id_list})"
         )
-        print(f"    Deleted {len(revision_ids)} session(s)")
-
-    # Also delete any orphaned sessions (design_revision_id IS NULL from previous wipes)
-    execute_query(
-        "DELETE FROM engineering_review_sessions WHERE design_revision_id IS NULL"
-    )
-
-    # Delete artifact → cascades to revisions → cascades to all drawing tables
-    execute_query(
-        "DELETE FROM design_artifacts WHERE artifact_number = 'HORN-HSG-2705'"
-    )
-    print("    Artifact and all related data removed (cascade).")
+        # Also clear any orphaned sessions left over from previous partial reseeds
+        execute_query(
+            "DELETE FROM engineering_review_sessions WHERE design_revision_id IS NULL"
+        )
+        # Delete revisions — cascades to ALL drawing sub-tables
+        execute_query(
+            f"DELETE FROM design_revisions WHERE artifact_id = %s::uuid",
+            (artifact_id,),
+        )
+        print(f"    Cleared {len(revision_ids)} revision(s) and all dependent data.")
+    else:
+        print("    No existing revisions — nothing to clear.")
 
 
 def reset_rule_catalog() -> None:
