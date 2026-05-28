@@ -3600,6 +3600,226 @@ async def get_vehicle_hierarchy(vehicle_id: str):
 
 
 # ============================================================================
+# DETERMINISTIC REVISION ANALYSIS ENDPOINTS
+# ============================================================================
+
+@app.post("/api/revisions/{revision_id}/analyze-dimensions")
+async def analyze_revision_dimensions(revision_id: str):
+    """
+    Generate full dimension-level analysis pipeline.
+    
+    Runs deterministic validation:
+    1. Extract dimensions from revision
+    2. Compare against approved baseline (if available)
+    3. Apply deterministic rules
+    4. Classify engineering impact
+    5. Generate release recommendation
+    
+    Returns: complete RevisionAnalysisSummary with explainability.
+    """
+    try:
+        from app.revision_analysis_engine import (
+            generate_revision_analysis,
+            persist_revision_analysis,
+        )
+        
+        # Get revision to find baseline
+        revision = fetch_one(
+            "SELECT part_id, revision_number FROM part_revisions WHERE id = %s::uuid",
+            (revision_id,)
+        )
+        
+        if not revision:
+            raise HTTPException(404, "Revision not found")
+        
+        # Find approved baseline (for now, assume it's the previous revision)
+        # In production, this should be marked explicitly
+        baseline = fetch_one("""
+            SELECT id FROM part_revisions
+            WHERE part_id = %s::uuid AND revision_number < %s
+            ORDER BY revision_number DESC
+            LIMIT 1
+        """, (revision["part_id"], revision["revision_number"]))
+        
+        baseline_revision_id = str(baseline["id"]) if baseline else None
+        
+        # Generate complete analysis
+        analysis = generate_revision_analysis(revision_id, baseline_revision_id)
+        
+        # Persist to database
+        persist_revision_analysis(revision_id, analysis)
+        
+        return {
+            "success": True,
+            "analysis": analysis.dict(),
+            "message": f"Analysis complete — {analysis.status}",
+        }
+    
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Analysis failed: {exc}")
+
+
+@app.get("/api/revisions/{revision_id}/analysis")
+async def get_revision_analysis(revision_id: str):
+    """
+    Retrieve full analysis with explainability for a revision.
+    
+    Returns: RevisionAnalysisSummary containing:
+    - validation context (extraction/comparison/validation state)
+    - dimension-level evaluations with engineering impact
+    - triggered deterministic rules
+    - release recommendation with reasoning
+    """
+    try:
+        row = fetch_one("""
+            SELECT analysis_json FROM revision_impact_analysis
+            WHERE part_revision_id = %s::uuid
+            ORDER BY analysis_timestamp DESC
+            LIMIT 1
+        """, (revision_id,))
+        
+        if not row:
+            raise HTTPException(404, "Analysis not found — run POST /analyze-dimensions first")
+        
+        analysis = row["analysis_json"]
+        
+        return {
+            "success": True,
+            "analysis": analysis,
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Could not retrieve analysis: {exc}")
+
+
+@app.get("/api/revisions/{revision_id}/dimension/{dimension_id}/analysis")
+async def get_dimension_analysis(revision_id: str, dimension_id: str):
+    """
+    Retrieve single dimension analysis with full explainability.
+    
+    Shows:
+    - baseline vs current values
+    - tolerance comparison
+    - extraction status
+    - engineering impact classification
+    - validation reasoning
+    - deterministic rules triggered
+    """
+    try:
+        row = fetch_one("""
+            SELECT analysis_json FROM revision_impact_analysis
+            WHERE part_revision_id = %s::uuid
+            ORDER BY analysis_timestamp DESC
+            LIMIT 1
+        """, (revision_id,))
+        
+        if not row:
+            raise HTTPException(404, "Revision analysis not found")
+        
+        analysis = row["analysis_json"]
+        dim_analysis = next(
+            (d for d in analysis.get("dimension_analyses", []) if d["dimension_id"] == dimension_id),
+            None
+        )
+        
+        if not dim_analysis:
+            raise HTTPException(404, f"Dimension {dimension_id} not found in analysis")
+        
+        return {
+            "success": True,
+            "dimension": dim_analysis,
+            "validation_context": analysis.get("validation_context"),
+            "triggered_rules": dim_analysis.get("triggered_rules", []),
+            "engineering_impact": dim_analysis.get("engineering_impact"),
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Could not retrieve dimension analysis: {exc}")
+
+
+@app.get("/api/revisions/{revision_id}/comparison/explainability")
+async def get_comparison_explainability(revision_id: str, baseline_id: Optional[str] = None):
+    """
+    Get comparison reasoning for all dimensions across baseline → revision.
+    
+    Explains:
+    - what changed (delta classification)
+    - why it matters (engineering impact)
+    - what rules were triggered
+    - what severity was assigned
+    - what action is recommended
+    """
+    try:
+        # Get current revision analysis
+        current_row = fetch_one("""
+            SELECT analysis_json FROM revision_impact_analysis
+            WHERE part_revision_id = %s::uuid
+            ORDER BY analysis_timestamp DESC
+            LIMIT 1
+        """, (revision_id,))
+        
+        if not current_row:
+            raise HTTPException(404, "Revision analysis not found")
+        
+        current_analysis = current_row["analysis_json"]
+        
+        # Build explainability structure
+        explainability = {
+            "revision_id": revision_id,
+            "baseline_id": baseline_id,
+            "validation_context": current_analysis.get("validation_context"),
+            "extraction_summary": current_analysis.get("extraction_summary"),
+            "comparison_summary": current_analysis.get("comparison_summary"),
+            "validation_reasoning": current_analysis.get("validation_reasoning"),
+            "overall_status": current_analysis.get("status"),
+            "release_recommendation": current_analysis.get("release_recommendation"),
+            
+            # Dimension-by-dimension explainability
+            "dimensions": [
+                {
+                    "dimension_id": d["dimension_id"],
+                    "name": d["name"],
+                    "baseline_value": d["baseline_value"],
+                    "current_value": d["current_value"],
+                    "baseline_tolerance": d["baseline_tolerance"],
+                    "current_tolerance": d["current_tolerance"],
+                    "change_type": d["change_type"],
+                    "delta_percent": d["delta_percent"],
+                    "criticality": d["criticality"],
+                    "engineering_impact": d["engineering_impact"],
+                    "severity": d["severity"],
+                    "finding": d["finding"],
+                    "reason": d["reason"],
+                    "triggered_rules": d["triggered_rules"],
+                    "recommended_action": d["recommended_action"],
+                }
+                for d in current_analysis.get("dimension_analyses", [])
+            ],
+            
+            # Summary counts
+            "critical_findings_count": len(current_analysis.get("critical_findings", [])),
+            "warning_findings_count": len(current_analysis.get("warning_findings", [])),
+            "dimensions_analyzed": len(current_analysis.get("dimension_analyses", [])),
+        }
+        
+        return {
+            "success": True,
+            "explainability": explainability,
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Could not retrieve comparison explainability: {exc}")
+
+
+# ============================================================================
 # ERROR HANDLERS
 # ============================================================================
 

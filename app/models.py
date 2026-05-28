@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 
 # Evaluation Dimension
 class EvaluationDimension(BaseModel):
@@ -394,3 +395,154 @@ class RevisionComparison(BaseModel):
     new_revision: PartRevision
     changes: dict = Field(description="Diff of old vs new specs")
     impact_analysis: Optional[RevisionImpactAnalysis] = None
+
+
+# ============================================================================
+# DETERMINISTIC REVISION ANALYSIS & VALIDATION MODELS
+# ============================================================================
+
+class ValidationContextState(str, Enum):
+    """Explicit validation state tracking - separates completion from success"""
+    VALIDATED = "VALIDATED"  # extraction + comparison + validation all succeeded
+    PARTIAL_EXTRACTION = "PARTIAL_EXTRACTION"  # extracted some dimensions but not all
+    COMPARISON_INCOMPLETE = "COMPARISON_INCOMPLETE"  # extraction ok but comparison failed
+    NO_BASELINE = "NO_BASELINE"  # no baseline revision to compare against
+    REVIEW_PENDING = "REVIEW_PENDING"  # insufficient data for deterministic validation
+
+
+class RevisionValidationContext(BaseModel):
+    """
+    Tracks extraction/comparison/validation state per revision.
+    Separates "validation completed" from "validation succeeded".
+    """
+    state: ValidationContextState
+    
+    # Extraction metrics
+    entities_extracted: int = 0
+    dimensions_extracted: int = 0
+    tolerances_extracted: int = 0
+    features_extracted: int = 0
+    
+    # Baseline availability
+    baseline_available: bool = False
+    baseline_revision: Optional[str] = None
+    
+    # Comparison execution
+    comparison_executed: bool = False
+    comparison_completed: bool = False
+    
+    # Validation execution
+    rules_executed: int = 0
+    critical_findings: int = 0
+    warning_findings: int = 0
+    
+    # Summary
+    summary_text: str = Field(description="Human-readable state description")
+
+
+class EngineeringImpactAnalysis(BaseModel):
+    """
+    Classification of engineering impact for a dimension/feature.
+    Each flag indicates whether this change affects that domain.
+    """
+    assembly_alignment: bool = False
+    inspection_fixture_dependency: bool = False
+    mating_geometry_dependency: bool = False
+    tolerance_stack_dependency: bool = False
+    manufacturing_process_dependency: bool = False
+    safety_critical: bool = False
+    
+    impact_summary: str = Field(description="Brief text description of impacts")
+
+
+class DimensionEvaluation(BaseModel):
+    """
+    Complete evaluation for a single dimension across revisions.
+    Shows baseline vs current, delta classification, and validation result.
+    """
+    dimension_id: str = Field(description="Unique dimension identifier")
+    name: str = Field(description="Human-readable dimension name")
+    baseline_revision: str = Field(description="Approved reference revision (e.g., 'R3')")
+    revision_under_review: str = Field(description="Revision being evaluated (e.g., 'R4')")
+    
+    # Extraction status
+    baseline_exists: bool = Field(description="Dimension present in baseline")
+    current_exists: bool = Field(description="Dimension present in current revision")
+    tolerance_present_baseline: bool = Field(description="Tolerance spec in baseline")
+    tolerance_present_current: bool = Field(description="Tolerance spec in current")
+    
+    # Baseline values (for reference)
+    baseline_value: Optional[str] = None
+    baseline_tolerance: Optional[str] = None
+    
+    # Current values (under review)
+    current_value: Optional[str] = None
+    current_tolerance: Optional[str] = None
+    
+    # Delta classification
+    change_type: str = Field(
+        description="IDENTICAL|ADDED|REMOVED|MODIFIED|TOLERANCE_LOOSENED|TOLERANCE_TIGHTENED"
+    )
+    delta_percent: Optional[float] = Field(None, description="Percentage change if numeric")
+    
+    # Criticality classification
+    criticality: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"] = "HIGH"
+    
+    # Engineering impact
+    engineering_impact: EngineeringImpactAnalysis
+    
+    # Validation result
+    severity: Literal["SAFE", "WARN", "BLOCK"] = "SAFE"
+    finding: str = Field(description="Short title of finding")
+    reason: str = Field(description="Detailed explanation of why this severity")
+    
+    # Triggered rules
+    triggered_rules: List[str] = Field(default_factory=list, description="Which deterministic rules fired")
+    
+    # Recommendation
+    recommended_action: Optional[str] = None
+
+
+class RevisionAnalysisSummary(BaseModel):
+    """
+    Complete deterministic analysis for an entire revision.
+    Separates extraction/comparison/validation states from release recommendation.
+    """
+    revision_id: str
+    revision_number: int
+    part_id: str
+    part_name: str
+    baseline_revision_id: Optional[str] = None
+    baseline_revision_number: Optional[int] = None
+    
+    # Validation context - tracks completion status
+    validation_context: RevisionValidationContext
+    
+    # Dimension-level analyses
+    dimension_analyses: List[DimensionEvaluation] = Field(
+        default_factory=list,
+        description="Complete evaluation for each dimension"
+    )
+    
+    # Overall recommendation
+    status: Literal["SAFE", "WARN", "BLOCK", "REVIEW_PENDING"] = "SAFE"
+    release_recommendation: str = Field(description="Human-readable release decision")
+    
+    # Findings summary
+    critical_findings: List[str] = Field(default_factory=list)
+    warning_findings: List[str] = Field(default_factory=list)
+    
+    # Explainability summaries
+    extraction_summary: str = Field(
+        description="Summary of what was extracted from the revision"
+    )
+    comparison_summary: str = Field(
+        description="Summary of comparison against baseline"
+    )
+    validation_reasoning: str = Field(
+        description="Summary of validation logic and reasoning"
+    )
+    
+    # Metadata
+    analysis_timestamp: Optional[datetime] = None
+    confidence_score: int = Field(default=95, ge=0, le=100, description="Deterministic rule confidence")

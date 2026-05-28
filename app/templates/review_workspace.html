@@ -265,6 +265,105 @@
     .catalog-rule-desc { font-size: 11.5px; color: #6b7a90; margin-top: 2px; line-height: 1.5; }
     .catalog-rule-body { flex: 1; min-width: 0; }
 
+    /* ── Engineering Analysis ── */
+    .analysis-panel { margin-top: 14px; }
+    .dimension-analysis {
+        background: #fff; border: 1px solid #e2e7ef; border-radius: 8px;
+        margin-bottom: 8px; overflow: hidden;
+    }
+    .dimension-row {
+        display: flex; align-items: center; gap: 12px; padding: 13px 14px;
+        cursor: pointer; user-select: none; transition: background .13s;
+        border-bottom: 1px solid #f0f2f6;
+    }
+    .dimension-row:hover { background: #fafbfc; }
+    .dimension-row:last-child { border-bottom: none; }
+    .dimension-name { flex: 1; font-weight: 600; font-size: 13px; }
+    .dimension-criticality {
+        display: inline-flex; align-items: center; justify-content: center;
+        padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700;
+        text-transform: uppercase; letter-spacing: .03em; margin-left: auto;
+    }
+    .criticality.CRITICAL { background: #fee2e2; color: #dc2626; }
+    .criticality.HIGH { background: #fef3c7; color: #b45309; }
+    .criticality.MEDIUM { background: #e0e7ff; color: #4f46e5; }
+    .criticality.LOW { background: #e0f2fe; color: #0369a1; }
+
+    .dimension-details {
+        display: none; padding: 0 14px 14px; background: #fafbfc;
+        border-top: 1px solid #f0f2f6;
+    }
+    .dimension-details.open { display: block; }
+
+    .analysis-section {
+        margin-bottom: 12px;
+    }
+    .analysis-section:last-child { margin-bottom: 0; }
+    .analysis-section-title {
+        font-size: 11px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: .05em; color: #6b7a90; margin-bottom: 6px;
+    }
+
+    .comparison-table {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px;
+    }
+    .comparison-cell {
+        padding: 8px; background: #fff; border: 1px solid #ebeef3;
+        border-radius: 5px;
+    }
+    .comparison-label { font-weight: 600; color: #374151; margin-bottom: 2px; }
+    .comparison-value {
+        font-family: 'Monaco', 'Courier New', monospace;
+        color: #0f1929; font-size: 11.5px; word-break: break-all;
+    }
+    .comparison-value.missing { color: #9ba8b7; font-style: italic; }
+
+    .impact-list {
+        display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .impact-tag {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 4px 8px; border-radius: 4px; background: #eff6ff;
+        color: #2563eb; font-size: 11px; font-weight: 600;
+    }
+
+    .rules-triggered {
+        display: flex; flex-wrap: wrap; gap: 5px;
+    }
+    .rule-tag {
+        display: inline-flex; align-items: center; gap: 3px;
+        padding: 3px 7px; border-radius: 4px; background: #fef2f2;
+        color: #dc2626; font-size: 10px; font-weight: 600;
+    }
+
+    .validation-box {
+        padding: 10px; border-radius: 6px; background: #f0fdf4;
+        border-left: 3px solid #22c55e; font-size: 12px; line-height: 1.5;
+    }
+    .validation-box.warn {
+        background: #fefce8; border-left-color: #eab308;
+    }
+    .validation-box.block {
+        background: #fef2f2; border-left-color: #ef4444;
+    }
+
+    .validation-context-bar {
+        padding: 12px 14px; background: #f8fafc; border: 1px solid #ebeef3;
+        border-radius: 8px; margin-bottom: 12px; font-size: 12px;
+    }
+    .validation-context-state {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 4px 10px; border-radius: 5px; background: #fff;
+        border: 1px solid #e2e7ef; font-weight: 600;
+    }
+    .validation-context-dot {
+        width: 8px; height: 8px; border-radius: 50%;
+    }
+    .validation-context-dot.VALIDATED { background: #22c55e; }
+    .validation-context-dot.PARTIAL_EXTRACTION { background: #f59e0b; }
+    .validation-context-dot.NO_BASELINE { background: #ef4444; }
+    .validation-context-dot.REVIEW_PENDING { background: #8b5cf6; }
+
     @media (max-width: 1100px) {
         .workspace-cols { grid-template-columns: 1fr; }
     }
@@ -272,6 +371,7 @@
         .ws-title-row { flex-direction: column; }
         .metric-strip { flex-wrap: wrap; }
         .graph-edge { grid-template-columns: 1fr; }
+        .comparison-table { grid-template-columns: 1fr; }
     }
 </style>
 {% endblock %}
@@ -429,6 +529,48 @@
                 </div>
             </div>
             {% endif %}
+
+            <!-- Engineering Analysis (if available) -->
+            <div id="analysisPanel" class="card panel" style="display:none;">
+                <div class="panel-head">
+                    <span class="panel-title">Engineering Analysis</span>
+                </div>
+                
+                <!-- Validation Context Summary -->
+                <div id="validationContext" class="validation-context-bar">
+                    <div>
+                        <strong>Validation State:</strong>
+                        <span class="validation-context-state" id="contextState">
+                            <span class="validation-context-dot VALIDATED"></span>
+                            VALIDATED
+                        </span>
+                    </div>
+                    <div style="margin-top: 8px; color: #6b7a90; font-size: 11.5px;">
+                        <span id="contextSummary">Loading validation context...</span>
+                    </div>
+                </div>
+
+                <!-- Dimension Analyses -->
+                <div class="analysis-panel">
+                    <div id="dimensionsList"></div>
+                </div>
+
+                <!-- Analysis Summary -->
+                <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #ebeef3;">
+                    <div class="analysis-section">
+                        <div class="analysis-section-title">Extraction Summary</div>
+                        <div id="extractionSummary" style="font-size: 12px; color: #4b5568; line-height: 1.5;">
+                            Loading extraction summary...
+                        </div>
+                    </div>
+                    <div class="analysis-section" style="margin-top: 8px;">
+                        <div class="analysis-section-title">Validation Reasoning</div>
+                        <div id="validationReasoning" style="font-size: 12px; color: #4b5568; line-height: 1.5;">
+                            Loading validation reasoning...
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <!-- Validation Rule Results -->
             <div class="card panel">
@@ -668,5 +810,151 @@ async function saveNotes(event) {
     }
     window.location.reload();
 }
+
+// ============================================================================
+// ENGINEERING ANALYSIS EXPLAINABILITY
+// ============================================================================
+
+async function loadRevisionAnalysis() {
+    const revisionId = "{{ session.part_revision_id or '' }}";
+    if (!revisionId) {
+        console.log("No revision ID available for analysis");
+        return;
+    }
+
+    try {
+        // First, trigger analysis generation
+        const analyzeResponse = await fetch(`/api/revisions/${revisionId}/analyze-dimensions`, {
+            method: "POST"
+        });
+        
+        if (!analyzeResponse.ok) {
+            console.log("Analysis generation not available");
+            return;
+        }
+
+        // Then fetch the analysis
+        const response = await fetch(`/api/revisions/${revisionId}/analysis`);
+        if (!response.ok) {
+            console.log("Analysis not available");
+            return;
+        }
+
+        const data = await response.json();
+        const analysis = data.analysis;
+        
+        if (!analysis) {
+            return;
+        }
+
+        // Display analysis panel
+        document.getElementById("analysisPanel").style.display = "block";
+
+        // Update validation context
+        const context = analysis.validation_context;
+        const contextState = document.getElementById("contextState");
+        contextState.innerHTML = `
+            <span class="validation-context-dot ${context.state}"></span>
+            ${context.state.replace(/_/g, ' ')}
+        `;
+        document.getElementById("contextSummary").textContent = context.summary_text;
+
+        // Build dimension analyses display
+        const dimensionsList = document.getElementById("dimensionsList");
+        dimensionsList.innerHTML = analysis.dimension_analyses.map(dim => `
+            <div class="dimension-analysis">
+                <div class="dimension-row" onclick="toggleDimensionDetails(this)">
+                    <span class="dimension-name">${dim.name}</span>
+                    <span class="dimension-criticality criticality-${dim.criticality}">${dim.criticality}</span>
+                    <span class="badge badge-${dim.severity}" style="flex-shrink:0;">${dim.severity}</span>
+                </div>
+                <div class="dimension-details">
+                    <!-- Baseline vs Current -->
+                    <div class="analysis-section">
+                        <div class="analysis-section-title">Baseline vs Current</div>
+                        <div class="comparison-table">
+                            <div class="comparison-cell">
+                                <div class="comparison-label">Baseline (${dim.baseline_revision})</div>
+                                <div class="comparison-value ${!dim.baseline_exists ? 'missing' : ''}">
+                                    ${dim.baseline_exists ? (dim.baseline_value || 'not specified') : 'NOT EXTRACTED'}
+                                </div>
+                                ${dim.baseline_tolerance ? `<div class="comparison-label" style="margin-top:4px;">Tolerance</div><div class="comparison-value">${dim.baseline_tolerance}</div>` : ''}
+                            </div>
+                            <div class="comparison-cell">
+                                <div class="comparison-label">Current (${dim.revision_under_review})</div>
+                                <div class="comparison-value ${!dim.current_exists ? 'missing' : ''}">
+                                    ${dim.current_exists ? (dim.current_value || 'not specified') : 'MISSING'}
+                                </div>
+                                ${dim.current_tolerance ? `<div class="comparison-label" style="margin-top:4px;">Tolerance</div><div class="comparison-value">${dim.current_tolerance}</div>` : ''}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Delta Classification -->
+                    <div class="analysis-section">
+                        <div class="analysis-section-title">Change Classification</div>
+                        <div style="font-size: 12px;">
+                            <strong>${dim.change_type}</strong>
+                            ${dim.delta_percent !== null ? ` (${dim.delta_percent > 0 ? '+' : ''}${dim.delta_percent.toFixed(1)}%)` : ''}
+                        </div>
+                    </div>
+
+                    <!-- Engineering Impact -->
+                    <div class="analysis-section">
+                        <div class="analysis-section-title">Engineering Impact</div>
+                        <div class="impact-list">
+                            ${dim.engineering_impact.assembly_alignment ? '<span class="impact-tag">Assembly Alignment</span>' : ''}
+                            ${dim.engineering_impact.inspection_fixture_dependency ? '<span class="impact-tag">Inspection Fixture</span>' : ''}
+                            ${dim.engineering_impact.mating_geometry_dependency ? '<span class="impact-tag">Mating Geometry</span>' : ''}
+                            ${dim.engineering_impact.tolerance_stack_dependency ? '<span class="impact-tag">Tolerance Stack</span>' : ''}
+                            ${dim.engineering_impact.manufacturing_process_dependency ? '<span class="impact-tag">Manufacturing</span>' : ''}
+                            ${dim.engineering_impact.safety_critical ? '<span class="impact-tag" style="background:#fee2e2; color:#dc2626;">SAFETY CRITICAL</span>' : ''}
+                        </div>
+                        ${!Object.values(dim.engineering_impact).slice(0, 6).some(v => v) ? '<div style="font-size:11px; color:#9ba8b7;">No significant engineering impact</div>' : ''}
+                    </div>
+
+                    <!-- Validation Result -->
+                    <div class="analysis-section">
+                        <div class="analysis-section-title">Validation Result</div>
+                        <div class="validation-box ${dim.severity === 'WARN' ? 'warn' : dim.severity === 'BLOCK' ? 'block' : ''}">
+                            <strong>${dim.finding}</strong>
+                            <div style="margin-top: 4px;">${dim.reason}</div>
+                            ${dim.recommended_action ? `<div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid currentColor; opacity: 0.8;">→ ${dim.recommended_action}</div>` : ''}
+                        </div>
+                    </div>
+
+                    <!-- Triggered Rules -->
+                    ${dim.triggered_rules.length > 0 ? `
+                    <div class="analysis-section">
+                        <div class="analysis-section-title">Triggered Rules</div>
+                        <div class="rules-triggered">
+                            ${dim.triggered_rules.map(rule => `<span class="rule-tag">${rule}</span>`).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+        `).join('');
+
+        // Update summaries
+        document.getElementById("extractionSummary").textContent = analysis.extraction_summary;
+        document.getElementById("validationReasoning").textContent = analysis.validation_reasoning;
+
+    } catch (error) {
+        console.error("Error loading revision analysis:", error);
+    }
+}
+
+function toggleDimensionDetails(element) {
+    const details = element.nextElementSibling;
+    if (details && details.classList.contains('dimension-details')) {
+        details.classList.toggle('open');
+    }
+}
+
+// Load analysis when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    loadRevisionAnalysis();
+});
 </script>
 {% endblock %}
