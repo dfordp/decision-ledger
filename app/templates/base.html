@@ -3,78 +3,212 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}DecisionLedger{% endblock %}</title>
+    <title>{% block title %}ReviewGraph{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f7fa;
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            background: #f4f6f9;
+            color: #0f1929;
+            font-size: 14px;
+            line-height: 1.55;
+            -webkit-font-smoothing: antialiased;
         }
-        
-        .navbar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 1rem 2rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        
-        .navbar-container {
-            max-width: 1400px;
-            margin: 0 auto;
+
+        /* ── Navigation ── */
+        .nav {
+            height: 52px;
+            background: #0f1929;
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            padding: 0 20px;
+            gap: 4px;
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            border-bottom: 1px solid rgba(255,255,255,.05);
         }
-        
-        .navbar-brand {
-            color: white;
-            font-size: 1.5rem;
+
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+            color: #fff;
             font-weight: 700;
+            font-size: 14px;
+            letter-spacing: -.01em;
+            padding: 4px 8px 4px 4px;
+            border-radius: 8px;
+            margin-right: 10px;
+            transition: background .13s;
+        }
+        .nav-brand:hover { background: rgba(255,255,255,.07); }
+
+        .nav-logo {
+            width: 26px; height: 26px;
+            background: #2a6fdb;
+            border-radius: 6px;
+            display: grid;
+            place-items: center;
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+
+        .nav a {
             text-decoration: none;
+            color: #8492a6;
+            font-size: 13px;
+            font-weight: 500;
+            padding: 5px 10px;
+            border-radius: 7px;
+            transition: color .13s, background .13s;
+            white-space: nowrap;
+        }
+        .nav a:hover { color: #e2e8f0; background: rgba(255,255,255,.07); }
+        .nav a.nav-active { color: #fff; background: rgba(255,255,255,.1); }
+
+        .nav-sep {
+            width: 1px; height: 18px;
+            background: rgba(255,255,255,.1);
+            margin: 0 8px;
+        }
+        .nav-spacer { flex: 1; }
+
+        /* ── Design system tokens ── */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 99px;
+            padding: 2px 9px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            white-space: nowrap;
+        }
+        .badge-SAFE   { background: #ecfdf5; color: #059669; }
+        .badge-WARN   { background: #fffbeb; color: #b45309; }
+        .badge-BLOCK  { background: #fef2f2; color: #dc2626; }
+        .badge-DRAFT  { background: #f0f9ff; color: #0284c7; }
+        .badge-INFO   { background: #f1f5f9; color: #475569; }
+        .badge-blue   { background: #eff6ff; color: #2563eb; }
+        .badge-purple { background: #f5f3ff; color: #7c3aed; }
+        .badge-teal   { background: #f0fdfa; color: #0d9488; }
+
+        .card {
+            background: #fff;
+            border: 1px solid #e2e7ef;
+            border-radius: 10px;
+            box-shadow: 0 1px 4px rgba(15,25,41,.04), 0 0 0 0 transparent;
+        }
+
+        .muted { color: #6b7a90; }
+        .fine  { color: #9ba8b7; font-size: 12px; }
+
+        .label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: #9ba8b7;
+        }
+
+        input, select, textarea {
+            font-family: inherit;
+            font-size: 13.5px;
+            border: 1.5px solid #d5dbe6;
+            border-radius: 7px;
+            padding: 8px 11px;
+            width: 100%;
+            outline: none;
+            transition: border-color .13s, box-shadow .13s;
+            color: #0f1929;
+            background: #fff;
+            appearance: none;
+        }
+        input:focus, select:focus, textarea:focus {
+            border-color: #2a6fdb;
+            box-shadow: 0 0 0 3px rgba(42,111,219,.1);
+        }
+        select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%239ba8b7' d='M6 8L0 0h12z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; }
+        textarea { resize: vertical; line-height: 1.5; }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 15px;
+            border-radius: 7px;
+            border: none;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: opacity .13s, transform .08s;
+            line-height: 1;
+        }
+        .btn:hover  { opacity: .88; }
+        .btn:active { transform: scale(.98); }
+        .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+        .btn-primary   { background: #2a6fdb; color: #fff; }
+        .btn-secondary { background: #f0f3f8; color: #0f1929; border: 1.5px solid #d5dbe6; }
+        .btn-teal      { background: #0d9488; color: #fff; }
+        .btn-danger    { background: #dc2626; color: #fff; }
+        .btn-ghost     { background: transparent; color: #6b7a90; border: 1.5px solid #e2e7ef; }
+        .btn-sm        { padding: 5px 11px; font-size: 12px; border-radius: 6px; }
+
+        .sep { height: 1px; background: #ebeef3; margin: 14px 0; }
+
+        .empty-box {
+            border: 1.5px dashed #d5dbe6;
+            border-radius: 8px;
+            padding: 24px;
+            text-align: center;
+            color: #9ba8b7;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .crumb {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: 5px;
+            font-size: 12.5px;
+            color: #9ba8b7;
+            margin-bottom: 14px;
         }
-        
-        .navbar-menu {
-            display: flex;
-            gap: 2rem;
-            list-style: none;
-        }
-        
-        .navbar-menu a {
-            color: white;
+        .crumb a {
+            color: #6b7a90;
             text-decoration: none;
-            font-weight: 500;
-            transition: opacity 0.2s;
+            transition: color .13s;
         }
-        
-        .navbar-menu a:hover {
-            opacity: 0.8;
-        }
+        .crumb a:hover { color: #0f1929; }
+        .crumb-sep { color: #c4cdd8; }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
 <body>
-    <nav class="navbar">
-        <div class="navbar-container">
-            <a href="/" class="navbar-brand">
-                ⚖️ DecisionLedger
-            </a>
-            <ul class="navbar-menu">
-                <li><a href="/">Home</a></li>
-                <li><a href="/history">History</a></li>
-                <li><a href="/tender/1">Tender #1</a></li>
-                <li><a href="/tender/2">Tender #2</a></li>
-                <li><a href="/tender/1/canvas">Canvas Mode</a></li>
-            </ul>
-        </div>
+    <nav class="nav">
+        <a href="/design-intake" class="nav-brand">
+            <span class="nav-logo">✦</span>
+            ReviewGraph
+        </a>
+        <a href="/design-intake">Drawings</a>
+        <a href="/pfmea/select">PFMEA</a>
+        <span class="nav-sep"></span>
+        <a href="/" class="fine" style="font-size: 12px;">Legacy</a>
+        <span class="nav-spacer"></span>
     </nav>
-    
+
     {% block content %}{% endblock %}
 </body>
 </html>

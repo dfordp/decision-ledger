@@ -9,6 +9,7 @@ import json
 import os
 import re
 import tempfile
+from pathlib import Path
 from psycopg2.extras import Json
 
 from fastapi import FastAPI, Request, Form, File, UploadFile, HTTPException, Query
@@ -36,6 +37,19 @@ from app.revision_analysis import (
     analyze_revision_with_groq,
     diff_revision_specs,
     map_changes_to_functions,
+)
+from app.review_graph import (
+    create_review_session_from_revision,
+    get_review_session,
+    update_review_session_notes,
+)
+from app.design_review import (
+    create_design_artifact,
+    create_design_revision,
+    create_review_session_from_design_revision,
+    get_design_artifact_detail,
+    list_design_artifacts,
+    seed_mock_bracket_review_data,
 )
 
 
@@ -84,6 +98,19 @@ def format_number(value, unit: str = "") -> str:
 
 # Add custom filter to Jinja2
 templates.env.filters['format_number'] = format_number
+
+
+DRAWING_ASSET_DIR = Path("app/static/drawings")
+
+
+def drawing_asset_url(filename: Optional[str]) -> Optional[str]:
+    """Return a static URL for a drawing asset if it exists in app/static/drawings."""
+    if not filename:
+        return None
+    clean_name = Path(filename).name
+    if (DRAWING_ASSET_DIR / clean_name).exists():
+        return f"/static/drawings/{clean_name}"
+    return None
 
 # ============================================================================
 # HTML PAGES
@@ -2609,6 +2636,170 @@ async def view_hierarchy(request: Request):
     })
 
 
+@app.get("/design-intake", response_class=HTMLResponse)
+async def design_intake_page(request: Request):
+    """Design-data-first ReviewGraph intake workspace."""
+    artifacts = list_design_artifacts()
+    return templates.TemplateResponse("design_intake.html", {
+        "request": request,
+        "artifacts": artifacts,
+        "sample_design_data": {
+            "approval_status": "REVIEW_REQUIRED",
+            "process": "Laser Cut + Bend",
+            "title_block": {
+                "drawing_number": "HORN-HSG-2705",
+                "revision": "R1",
+                "material": "CRCA Sheet Metal",
+                "thickness": "1.5 mm",
+                "scale": "1:1"
+            },
+            "geometric_entities": [
+                {
+                    "id": "OUTER_PROFILE",
+                    "name": "Bracket outer profile",
+                    "region": "Main view"
+                }
+            ],
+            "mounting_holes": [
+                {
+                    "id": "MH-L",
+                    "name": "Left mounting hole",
+                    "region": "Mounting-hole layout",
+                    "diameter": 8.0
+                }
+            ],
+            "dimensions": [
+                {
+                    "id": "D-101",
+                    "name": "Mounting hole diameter",
+                    "nominal": 8.0,
+                    "unit": "mm",
+                    "safety_critical": True,
+                    "source": "Sheet 1 Zone B4"
+                }
+            ],
+            "dimension_chains": [
+                {
+                    "id": "HOLE-POSITION-CHAIN",
+                    "name": "Mounting-hole location chain",
+                    "critical": True,
+                    "region": "Mounting-hole layout",
+                    "dimensions": [
+                        {
+                            "name": "Horizontal hole spacing",
+                            "value": 64.0,
+                            "unit": "mm",
+                            "tolerance": {"plus": 0.10, "minus": 0.10}
+                        }
+                    ]
+                }
+            ],
+            "hole_callouts": [
+                {"id": "HC-2X-M8", "text": "2X DIA 8.0 THRU", "region": "Mounting-hole layout"}
+            ],
+            "section_labels": [
+                {"id": "SEC-AA", "text": "SECTION A-A", "region": "Section A-A"}
+            ],
+            "thickness_annotations": [
+                {"id": "THK-1.5", "text": "THK 1.5 mm", "region": "Section A-A"}
+            ],
+            "validation_profile": {
+                "missing_tolerances": [],
+                "incomplete_dimension_chains": []
+            }
+        }
+    })
+
+
+@app.get("/design-artifacts/{artifact_id}", response_class=HTMLResponse)
+async def design_artifact_detail_page(request: Request, artifact_id: str):
+    """Design artifact revision timeline."""
+    try:
+        detail = get_design_artifact_detail(artifact_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return templates.TemplateResponse("design_artifact_detail.html", {
+        "request": request,
+        **detail,
+    })
+
+
+@app.post("/api/design-artifacts")
+async def create_design_artifact_api(request: Request):
+    """Create or update a drawing/design artifact."""
+    try:
+        data = await request.json()
+        artifact = create_design_artifact(data)
+        return JSONResponse({
+            "id": artifact["id"],
+            "artifact_number": artifact["artifact_number"],
+            "redirect_url": f"/design-artifacts/{artifact['id']}",
+        })
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"Missing required field: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create design artifact: {exc}")
+
+
+@app.post("/api/demo/drawing-validation/bracket-variants")
+async def seed_bracket_drawing_validation_demo():
+    """Create the sheet-metal bracket drawing validation demo variants."""
+    try:
+        result = seed_mock_bracket_review_data()
+        artifact = result.get("artifact") or {}
+        return JSONResponse({
+            "artifact_id": str(artifact.get("id")),
+            "artifact_number": artifact.get("artifact_number"),
+            "revision_count": result.get("revision_count", 0),
+            "redirect_url": result.get("redirect_url"),
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create drawing validation demo data: {exc}")
+
+
+@app.post("/api/design-artifacts/{artifact_id}/revisions")
+async def create_design_revision_api(artifact_id: str, request: Request):
+    """Create a structured design/drawing revision and persist deterministic deltas."""
+    try:
+        data = await request.json()
+        revision = create_design_revision(artifact_id, data)
+        return JSONResponse({
+            "id": revision["id"],
+            "revision_code": revision["revision_code"],
+            "redirect_url": f"/design-artifacts/{artifact_id}",
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create design revision: {exc}")
+
+
+@app.post("/api/design-revisions/{design_revision_id}/review-session")
+async def create_review_session_for_design_revision(design_revision_id: str, request: Request):
+    """Create or return a design-data-first ReviewGraph session."""
+    try:
+        payload = {}
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        review = create_review_session_from_design_revision(
+            design_revision_id=design_revision_id,
+            created_by=payload.get("created_by", "system"),
+        )
+        session = review["session"]
+        return JSONResponse({
+            "id": session["id"],
+            "session_number": session["session_number"],
+            "risk_status": session["risk_status"],
+            "redirect_url": f"/reviews/{session['id']}",
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create review session: {exc}")
+
+
 @app.get("/parts/{part_id}", response_class=HTMLResponse)
 async def part_detail(request: Request, part_id: str):
     """Detailed part page with revisions, DFMEA drafts, and historical context."""
@@ -3281,6 +3472,80 @@ async def generate_dfmea_draft_from_revision(revision_id: str):
         "message": "Generated DFMEA draft from prior revision context",
         "redirect_url": f"/pfmea/{new_pfmea_id}/canvas",
     })
+
+
+@app.post("/api/revisions/{revision_id}/review-session")
+async def create_review_session_for_revision(revision_id: str, request: Request):
+    """Create or return a ReviewGraph engineering review session for a revision."""
+    try:
+        payload = {}
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+
+        review = create_review_session_from_revision(
+            revision_id=revision_id,
+            created_by=payload.get("created_by", "system"),
+        )
+        session = review["session"]
+        return JSONResponse({
+            "id": session["id"],
+            "session_number": session["session_number"],
+            "risk_status": session["risk_status"],
+            "redirect_url": f"/reviews/{session['id']}",
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create review session: {exc}")
+
+
+@app.get("/reviews/{session_id}", response_class=HTMLResponse)
+async def review_workspace(request: Request, session_id: str):
+    """ReviewGraph engineering review workspace."""
+    try:
+        review = get_review_session(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    session = review.get("session") or {}
+    design_data = session.get("design_data_json") or {}
+    review["drawing_pdf_url"] = drawing_asset_url(session.get("design_source_filename"))
+    review["drawing_prt_url"] = drawing_asset_url(design_data.get("prt_filename") if isinstance(design_data, dict) else None)
+    review["drawing_prt_filename"] = design_data.get("prt_filename") if isinstance(design_data, dict) else None
+
+    all_rules = fetch_all(
+        "SELECT rule_key, display_name, rule_group, severity, description FROM engineering_review_rules ORDER BY severity, rule_group, display_name"
+    )
+    review["all_rules"] = all_rules
+
+    return templates.TemplateResponse("review_workspace.html", {
+        "request": request,
+        **review,
+    })
+
+
+@app.post("/api/reviews/{session_id}/notes")
+async def update_review_notes(session_id: str, request: Request):
+    """Persist reviewer notes and optional workflow status for a review session."""
+    try:
+        payload = await request.json()
+        review = update_review_session_notes(
+            session_id=session_id,
+            reviewer_notes=payload.get("reviewer_notes", ""),
+            status=payload.get("status"),
+        )
+        session = review["session"]
+        return JSONResponse({
+            "id": session["id"],
+            "status": session["status"],
+            "message": "Review notes saved",
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not update review notes: {exc}")
 
 
 @app.get("/api/vehicles")

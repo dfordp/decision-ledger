@@ -1,0 +1,605 @@
+{% extends "base.html" %}
+{% block title %}{{ artifact.artifact_number }} — ReviewGraph{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page { max-width: 1380px; margin: 0 auto; padding: 28px 24px; }
+
+    /* Artifact header */
+    .artifact-head { margin-bottom: 28px; }
+    .artifact-head h1 {
+        font-size: 22px; font-weight: 800; letter-spacing: -.025em; margin-bottom: 6px;
+    }
+    .artifact-sub { font-size: 15px; color: #6b7a90; margin-bottom: 12px; }
+    .artifact-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+    /* Two-column layout */
+    .layout { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; }
+
+    /* Section heading */
+    .sec-label { margin-bottom: 12px; }
+
+    /* Revision cards */
+    .revision-list { display: grid; gap: 14px; }
+
+    .rev-card {
+        background: #fff;
+        border: 1.5px solid #e2e7ef;
+        border-radius: 12px;
+        overflow: hidden;
+        transition: border-color .15s, box-shadow .15s;
+    }
+
+    .rev-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 14px 18px;
+        border-bottom: 1px solid #ebeef3;
+        background: #fafbfc;
+    }
+    .rev-code-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .rev-code {
+        font-size: 17px;
+        font-weight: 800;
+        letter-spacing: -.02em;
+        font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+        color: #0f1929;
+    }
+    .rev-head-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+    }
+    .rev-summary { font-size: 12.5px; color: #6b7a90; margin-top: 3px; }
+    .rev-changes {
+        font-size: 11.5px;
+        color: #9ba8b7;
+        font-weight: 500;
+    }
+
+    /* Media row (PDF + CAD) */
+    .rev-media { display: grid; grid-template-columns: 1fr 240px; }
+
+    .rev-pdf { overflow: hidden; }
+    .rev-pdf iframe { width: 100%; height: 300px; border: 0; display: block; }
+    .rev-pdf-empty {
+        height: 200px;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        background: #f8fafc; color: #9ba8b7; gap: 8px; padding: 20px; text-align: center;
+    }
+    .rev-pdf-empty-icon { font-size: 28px; opacity: .5; }
+
+    .rev-cad {
+        border-left: 1px solid #ebeef3;
+        background: #fafbfc;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .cad-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #9ba8b7; }
+    .cad-filename { font-size: 12.5px; font-weight: 600; color: #374151; margin-top: 2px; }
+    .cad-box {
+        flex: 1;
+        border: 1.5px dashed #d5dbe6;
+        border-radius: 8px;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        text-align: center; color: #9ba8b7; padding: 16px; gap: 8px;
+        font-size: 12.5px; line-height: 1.5;
+        background: #fff;
+    }
+    .cad-box-icon { font-size: 22px; opacity: .6; }
+    .cad-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    /* Empty state */
+    .empty-state {
+        text-align: center; padding: 52px 32px;
+        border: 2px dashed #d5dbe6; border-radius: 12px; color: #9ba8b7;
+    }
+    .empty-state-icon { font-size: 40px; margin-bottom: 12px; }
+    .empty-state h3 { font-size: 15px; font-weight: 600; color: #6b7a90; margin-bottom: 6px; }
+    .empty-state p { font-size: 13px; line-height: 1.6; max-width: 360px; margin: 0 auto; }
+
+    /* Sidebar form */
+    .form-card { padding: 20px; position: sticky; top: 68px; }
+    .form-card h2 { font-size: 15px; font-weight: 700; margin-bottom: 18px; }
+    .field { margin-bottom: 12px; }
+    .field .label { display: block; margin-bottom: 5px; }
+
+    .adv-toggle {
+        display: flex; align-items: center; gap: 7px; margin-top: 14px;
+        padding: 9px 12px; border-radius: 7px; border: 1.5px solid #e2e7ef;
+        background: #fafbfc; cursor: pointer;
+        font-size: 12px; font-weight: 600; color: #8492a6;
+        user-select: none; transition: background .13s, color .13s;
+    }
+    .adv-toggle:hover { background: #f0f3f8; color: #0f1929; }
+    .adv-arrow { font-size: 10px; transition: transform .2s; }
+    .adv-arrow.open { transform: rotate(90deg); }
+
+    .adv-body textarea {
+        margin-top: 10px;
+        min-height: 300px;
+        font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+        font-size: 12px; line-height: 1.5;
+        background: #f8fafc; color: #374151;
+    }
+    .form-submit { margin-top: 16px; }
+    .form-submit .btn { width: 100%; justify-content: center; }
+
+    @media (max-width: 960px) {
+        .layout { grid-template-columns: 1fr; }
+        .rev-media { grid-template-columns: 1fr; }
+        .rev-cad { border-left: none; border-top: 1px solid #ebeef3; }
+        .form-card { position: static; }
+    }
+
+    /* ── Revision Comparison Table ─────────────────────────────── */
+    .comp-section { margin-top: 28px; }
+    .comp-wrap { overflow-x: auto; border-radius: 10px; }
+    .comp-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12.5px;
+        white-space: nowrap;
+    }
+    .comp-table th, .comp-table td {
+        padding: 7px 12px;
+        border-bottom: 1px solid #ebeef3;
+        vertical-align: middle;
+    }
+    .comp-table thead tr {
+        background: #fafbfc;
+    }
+    .comp-th-label {
+        text-align: left;
+        font-weight: 600;
+        font-size: 11.5px;
+        color: #374151;
+        min-width: 200px;
+    }
+    .comp-th-region {
+        text-align: left;
+        font-weight: 500;
+        font-size: 11.5px;
+        color: #9ba8b7;
+        min-width: 120px;
+    }
+    .comp-th-rev {
+        text-align: center;
+        min-width: 110px;
+        border-left: 1px solid #ebeef3;
+        padding: 10px 14px;
+    }
+    .comp-th-rev.SAFE  { background: #ecfdf5; color: #059669; }
+    .comp-th-rev.BLOCK { background: #fef2f2; color: #dc2626; }
+    .comp-th-rev.WARN  { background: #fffbeb; color: #b45309; }
+    .comp-rev-code {
+        display: block;
+        font-weight: 800;
+        font-size: 15px;
+        font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+        letter-spacing: -.02em;
+    }
+    .comp-rev-status {
+        display: block;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .06em;
+        opacity: .7;
+        margin-top: 2px;
+    }
+    .comp-group-row td {
+        background: #f1f5f9;
+        font-weight: 700;
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: .07em;
+        color: #6b7a90;
+        padding: 5px 12px;
+    }
+    .comp-row:hover td { background: #fafbfc; }
+    .comp-row-changed .comp-th-label,
+    .comp-row-changed .comp-td-label { font-weight: 600; }
+    .comp-td-label {
+        font-size: 12.5px;
+        color: #374151;
+        white-space: nowrap;
+    }
+    .comp-crit-star {
+        color: #f59e0b;
+        margin-right: 4px;
+        font-size: 10px;
+        vertical-align: middle;
+    }
+    .comp-unit { color: #9ba8b7; font-size: 11px; margin-left: 3px; }
+    .comp-td-region {
+        color: #9ba8b7;
+        font-size: 11.5px;
+    }
+    .comp-td-val {
+        text-align: center;
+        border-left: 1px solid #ebeef3;
+        font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+        font-size: 12.5px;
+        color: #374151;
+    }
+    .comp-nominal { display: block; font-weight: 600; }
+    .comp-tol {
+        display: block;
+        font-size: 10px;
+        color: #9ba8b7;
+        font-weight: 400;
+        margin-top: 1px;
+    }
+    .comp-tol-missing { color: #ef4444; }
+    .comp-val-diff { background: #fffbeb; color: #92400e; }
+    .comp-val-diff .comp-tol { color: #b45309; }
+    .comp-val-ref { background: #f0fdf4; }
+    .comp-val-absent { color: #c4cdd8; }
+    .comp-val-present { color: #059669; font-weight: 700; font-size: 14px; }
+    .comp-val-warn { color: #d97706; font-weight: 700; font-size: 14px; }
+    .comp-feat-type {
+        display: inline-block;
+        font-size: 9.5px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .06em;
+        color: #9ba8b7;
+        margin-right: 5px;
+        vertical-align: middle;
+    }
+    .comp-legend {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        padding: 8px 12px;
+        border-top: 1px solid #ebeef3;
+        background: #fafbfc;
+        font-size: 11px;
+        color: #9ba8b7;
+    }
+    .comp-legend-item { display: flex; align-items: center; gap: 5px; }
+    .comp-legend-swatch {
+        width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+
+    <div class="crumb">
+        <a href="/design-intake">Drawings</a>
+        <span class="crumb-sep">›</span>
+        <span>{{ artifact.artifact_number }}</span>
+    </div>
+
+    <div class="artifact-head">
+        <h1>{{ artifact.artifact_number }}</h1>
+        <div class="artifact-sub">{{ artifact.title }}</div>
+        <div class="artifact-meta">
+            <span class="badge badge-blue">{{ artifact.artifact_type }}</span>
+            {% if artifact.domain %}
+            <span class="badge badge-INFO">{{ artifact.domain }}</span>
+            {% endif %}
+            {% if artifact.linked_part_number %}
+            <span class="badge badge-purple">{{ artifact.linked_part_number }}</span>
+            {% endif %}
+            {% if artifact.supplier %}
+            <span class="fine">{{ artifact.supplier }}</span>
+            {% endif %}
+            {% if artifact.material %}
+            <span class="fine">· {{ artifact.material }}</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="layout">
+
+        <!-- Revision timeline -->
+        <main>
+            <div class="label sec-label">
+                Revision Timeline
+                {% if revisions %}
+                <span class="badge badge-INFO" style="margin-left: 6px;">{{ revisions|length }}</span>
+                {% endif %}
+            </div>
+
+            {% if revisions %}
+            <div class="revision-list">
+                {% for revision in revisions %}
+                <div class="rev-card">
+                    <div class="rev-card-head">
+                        <div>
+                            <div class="rev-code-badge">
+                                <span class="rev-code">{{ revision.revision_code }}</span>
+                            </div>
+                            <div class="rev-summary">{{ revision.change_summary or "No change summary." }}</div>
+                        </div>
+                        <div class="rev-head-right">
+                            {% if revision.change_count %}
+                            <span class="rev-changes">{{ revision.change_count }} change{{ 's' if revision.change_count != 1 else '' }}</span>
+                            {% endif %}
+                            <button
+                                class="btn btn-primary btn-sm"
+                                onclick="openReview('{{ revision.id }}', this)">
+                                Open Review →
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="rev-media">
+                        <div class="rev-pdf">
+                            {% if revision.asset_url %}
+                            <iframe src="{{ revision.asset_url }}" title="{{ revision.revision_code }} drawing"></iframe>
+                            {% else %}
+                            <div class="rev-pdf-empty">
+                                <div class="rev-pdf-empty-icon">📄</div>
+                                <div class="fine">{{ revision.source_filename or "No filename" }}</div>
+                                <div class="fine">Place PDF in app/static/drawings</div>
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="rev-cad">
+                            <div class="cad-label">CAD / PRT</div>
+                            {% if revision.prt_asset_url %}
+                            <div class="cad-filename">{{ revision.design_data_json.prt_filename }}</div>
+                            <div class="cad-box">
+                                <span class="cad-box-icon">⬡</span>
+                                <span>Native PRT attached.<br>Needs GLB/STL for 3D preview.</span>
+                            </div>
+                            {% else %}
+                            <div class="cad-box">
+                                <span class="cad-box-icon">⬡</span>
+                                <span>No PRT found.<br>Add to app/static/drawings.</span>
+                            </div>
+                            {% endif %}
+                            <div class="cad-actions">
+                                {% if revision.asset_url %}
+                                <a class="btn btn-ghost btn-sm" href="{{ revision.asset_url }}" target="_blank">PDF ↗</a>
+                                {% endif %}
+                                {% if revision.prt_asset_url %}
+                                <a class="btn btn-ghost btn-sm" href="{{ revision.prt_asset_url }}" target="_blank">PRT ↓</a>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-state-icon">📐</div>
+                <h3>No revisions yet</h3>
+                <p>Add the released golden baseline first, then add variants to see deterministic validation findings.</p>
+            </div>
+            {% endif %}
+        </main>
+
+        <!-- Sidebar: add revision -->
+        <aside>
+            <div class="card form-card">
+                <h2>Add Revision</h2>
+                <form onsubmit="createRevision(event)">
+                    <div class="field">
+                        <span class="label">Revision Code</span>
+                        <input id="revision_code" value="R{{ (revisions|length) + 1 }}" />
+                    </div>
+                    <div class="field">
+                        <span class="label">Change Summary</span>
+                        <input id="change_summary" value="Structured drawing validation revision" />
+                    </div>
+                    <div class="field">
+                        <span class="label">Source Filename</span>
+                        <input id="source_filename" value="{{ artifact.artifact_number }}.pdf" />
+                    </div>
+
+                    <div class="adv-toggle" onclick="toggleAdv(this)">
+                        <span class="adv-arrow" id="advArrow">▶</span>
+                        Structured Drawing Data (JSON)
+                    </div>
+                    <div id="advBody" style="display:none;" class="adv-body">
+                        <textarea id="design_data_json">{
+  "approval_status": "REVIEW_REQUIRED",
+  "process": "Laser Cut + Bend",
+  "title_block": {
+    "drawing_number": "{{ artifact.artifact_number }}",
+    "revision": "R{{ (revisions|length) + 1 }}",
+    "material": "CRCA Sheet Metal",
+    "thickness": "1.5 mm",
+    "scale": "1:1"
+  },
+  "geometric_entities": [
+    { "id": "OUTER_PROFILE", "name": "Bracket outer profile", "region": "Main view" }
+  ],
+  "mounting_holes": [
+    { "id": "MH-L", "name": "Left mounting hole", "region": "Mounting-hole layout", "diameter": 8.0 },
+    { "id": "MH-R", "name": "Right mounting hole", "region": "Mounting-hole layout", "diameter": 8.0 }
+  ],
+  "section_geometry": [
+    { "id": "SEC-AA-GEOM", "name": "Section A-A profile", "region": "Section A-A" }
+  ],
+  "dimensions": [
+    {
+      "id": "D-HOLE-DIA",
+      "name": "Mounting hole diameter",
+      "nominal": 8.0,
+      "unit": "mm",
+      "critical": true,
+      "tolerance": { "plus": 0.05, "minus": 0.0 }
+    }
+  ],
+  "hole_callouts": [
+    { "id": "HC-2X-M8", "text": "2X DIA 8.0 THRU", "region": "Mounting-hole layout" }
+  ],
+  "section_labels": [
+    { "id": "SEC-AA", "text": "SECTION A-A", "region": "Section A-A" }
+  ],
+  "thickness_annotations": [
+    { "id": "THK-1.5", "text": "THK 1.5 mm", "region": "Section A-A" }
+  ],
+  "validation_profile": {}
+}</textarea>
+                    </div>
+
+                    <div class="form-submit">
+                        <button class="btn btn-primary" type="submit">Create Revision</button>
+                    </div>
+                </form>
+            </div>
+        </aside>
+
+    </div>
+
+    {% if comparison and comparison.revisions|length > 1 and comparison.dimensions %}
+    <section class="comp-section">
+        <div class="label sec-label" style="margin-bottom: 12px;">
+            Revision Comparison
+            <span class="badge badge-INFO" style="margin-left: 6px;">{{ comparison.revisions|length }} revisions · {{ comparison.dimensions|length }} dimensions</span>
+        </div>
+        <div class="card" style="padding: 0; overflow: hidden;">
+            <div class="comp-wrap">
+                <table class="comp-table">
+                    <thead>
+                        <tr>
+                            <th class="comp-th-label">Parameter</th>
+                            <th class="comp-th-region">Region</th>
+                            {% for rev in comparison.revisions %}
+                            <th class="comp-th-rev {{ rev.badge }}">
+                                <span class="comp-rev-code">{{ rev.revision_code }}</span>
+                                <span class="comp-rev-status">{{ rev.approval_status | replace("_", " ") | lower }}</span>
+                            </th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="comp-group-row">
+                            <td colspan="{{ 2 + comparison.revisions|length }}">Dimensions</td>
+                        </tr>
+                        {% for dim in comparison.dimensions %}
+                        <tr class="comp-row{% if dim.has_change %} comp-row-changed{% endif %}">
+                            <td class="comp-td-label">
+                                {% if dim.is_critical %}<span class="comp-crit-star">★</span>{% endif %}
+                                {{ dim.display_name }}<span class="comp-unit">{{ dim.unit }}</span>
+                            </td>
+                            <td class="comp-td-region">{{ dim.drawing_region }}</td>
+                            {% for val_info in dim.rev_vals %}
+                            {% if val_info is not none %}
+                            <td class="comp-td-val{% if val_info.diff_from_ref %} comp-val-diff{% elif val_info.is_ref %} comp-val-ref{% endif %}">
+                                <span class="comp-nominal">{{ val_info.nominal_str }}</span>
+                                {% if val_info.tol_plus is not none and val_info.tol_minus is not none %}
+                                <span class="comp-tol">+{{ val_info.tol_plus }}/−{{ val_info.tol_minus }}</span>
+                                {% else %}
+                                <span class="comp-tol comp-tol-missing">no tol.</span>
+                                {% endif %}
+                            </td>
+                            {% else %}
+                            <td class="comp-td-val comp-val-absent">—</td>
+                            {% endif %}
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+
+                        {% if comparison.features %}
+                        <tr class="comp-group-row">
+                            <td colspan="{{ 2 + comparison.revisions|length }}">Features (Holes · Cutouts · Flanges · Bends)</td>
+                        </tr>
+                        {% for feat in comparison.features %}
+                        <tr class="comp-row">
+                            <td class="comp-td-label">
+                                <span class="comp-feat-type">{{ feat.entity_type | replace("_", " ") }}</span>{{ feat.display_name }}
+                            </td>
+                            <td class="comp-td-region">{{ feat.drawing_region }}</td>
+                            {% for pres in feat.rev_presence %}
+                            <td class="comp-td-val{% if pres.present and pres.warn %} comp-val-warn{% elif pres.present %} comp-val-present{% else %} comp-val-absent{% endif %}">
+                                {% if pres.present %}✓{% else %}—{% endif %}
+                            </td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="comp-legend">
+                <span class="comp-legend-item"><span class="comp-legend-swatch" style="background:#f0fdf4; border:1px solid #bbf7d0;"></span>Approved reference value</span>
+                <span class="comp-legend-item"><span class="comp-legend-swatch" style="background:#fffbeb; border:1px solid #fde68a;"></span>Differs from reference</span>
+                <span class="comp-legend-item"><span class="comp-crit-star">★</span>Critical dimension</span>
+                <span class="comp-legend-item" style="color:#ef4444">no tol. = tolerance block missing</span>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+</div>
+
+<script>
+function toggleAdv(el) {
+    const body = document.getElementById('advBody');
+    const arrow = document.getElementById('advArrow');
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? 'block' : 'none';
+    arrow.textContent = hidden ? '▼' : '▶';
+    arrow.classList.toggle('open', hidden);
+}
+
+async function createRevision(event) {
+    event.preventDefault();
+    const btn = event.target.querySelector('button[type="submit"]');
+    const orig = btn.textContent;
+
+    const rawJson = document.getElementById("design_data_json").value || '{}';
+    let designData;
+    try { designData = JSON.parse(rawJson); }
+    catch (e) { alert("Structured Drawing Data JSON is invalid."); return; }
+
+    btn.disabled = true; btn.textContent = 'Creating…';
+    const response = await fetch("/api/design-artifacts/{{ artifact.id }}/revisions", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            revision_code:    document.getElementById("revision_code").value,
+            change_summary:   document.getElementById("change_summary").value,
+            source_filename:  document.getElementById("source_filename").value,
+            design_data_json: designData,
+            changed_by:       "design-reviewer"
+        })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+        btn.disabled = false; btn.textContent = orig;
+        alert(payload.detail || payload.error || "Failed to create revision.");
+        return;
+    }
+    window.location.href = payload.redirect_url;
+}
+
+async function openReview(revisionId, btn) {
+    const orig = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = 'Loading…';
+    const response = await fetch(`/api/design-revisions/${revisionId}/review-session`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ created_by: "design-reviewer" })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+        btn.disabled = false; btn.innerHTML = orig;
+        alert(payload.detail || payload.error || "Failed to open review.");
+        return;
+    }
+    window.location.href = payload.redirect_url;
+}
+</script>
+{% endblock %}

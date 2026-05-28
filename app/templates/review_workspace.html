@@ -1,0 +1,672 @@
+{% extends "base.html" %}
+{% block title %}Review · {{ session.session_number }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .workspace { max-width: 1460px; margin: 0 auto; padding: 24px 20px 48px; }
+
+    /* ── Header ── */
+    .ws-header { margin-bottom: 24px; }
+
+    .ws-title-row {
+        display: flex; align-items: flex-start; justify-content: space-between;
+        gap: 20px; margin-bottom: 16px;
+    }
+    .ws-title-row h1 {
+        font-size: 20px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 4px;
+    }
+    .ws-subtitle { font-size: 12.5px; color: #9ba8b7; }
+
+    /* Risk badge (large) */
+    .risk-badge {
+        display: flex; flex-direction: column; align-items: center;
+        padding: 10px 18px; border-radius: 10px; flex-shrink: 0;
+        min-width: 96px; text-align: center;
+    }
+    .risk-badge.SAFE  { background: #ecfdf5; border: 1.5px solid #a7f3d0; }
+    .risk-badge.WARN  { background: #fffbeb; border: 1.5px solid #fde68a; }
+    .risk-badge.BLOCK { background: #fef2f2; border: 1.5px solid #fecaca; }
+    .risk-badge-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .risk-badge-label.SAFE  { color: #059669; }
+    .risk-badge-label.WARN  { color: #b45309; }
+    .risk-badge-label.BLOCK { color: #dc2626; }
+    .risk-badge-value { font-size: 20px; font-weight: 800; letter-spacing: -.02em; line-height: 1.2; margin-top: 2px; }
+    .risk-badge-value.SAFE  { color: #059669; }
+    .risk-badge-value.WARN  { color: #ca8a04; }
+    .risk-badge-value.BLOCK { color: #dc2626; }
+
+    /* Metric strip */
+    .metric-strip { display: flex; gap: 8px; flex-wrap: wrap; }
+    .metric-tile {
+        background: #fff; border: 1px solid #e2e7ef; border-radius: 8px;
+        padding: 10px 14px; min-width: 80px;
+    }
+    .metric-tile .label { margin-bottom: 3px; }
+    .metric-tile .value { font-size: 18px; font-weight: 800; letter-spacing: -.02em; line-height: 1; }
+    .metric-tile .value.sm { font-size: 13px; font-weight: 600; padding-top: 2px; }
+
+    /* ── Workspace grid ── */
+    .workspace-cols {
+        display: grid;
+        grid-template-columns: minmax(0, 1.7fr) 308px;
+        gap: 16px;
+        align-items: start;
+    }
+
+    /* ── Panels ── */
+    .panel { padding: 18px; margin-bottom: 14px; }
+    .panel:last-child { margin-bottom: 0; }
+
+    .panel-head {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
+    }
+    .panel-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #9ba8b7; }
+    .count-bubble {
+        background: #ebeef3; color: #6b7a90; border-radius: 99px;
+        padding: 1px 7px; font-size: 11px; font-weight: 700;
+    }
+
+    /* ── Drawing preview ── */
+    .pdf-wrap {
+        position: relative;
+        border-radius: 8px; overflow: hidden;
+        border: 1px solid #e2e7ef; background: #fff;
+        margin-bottom: 8px;
+    }
+    .pdf-wrap iframe { width: 100%; height: 540px; border: 0; display: block; }
+    .pdf-empty {
+        height: 220px; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; color: #9ba8b7; gap: 8px; font-size: 13px;
+        background: #f8fafc; text-align: center; padding: 20px;
+    }
+    .pdf-empty-icon { font-size: 26px; opacity: .4; }
+
+    /* Finding chips overlaid on the PDF */
+    .pdf-overlay {
+        position: absolute; inset: 0;
+        pointer-events: none;
+        z-index: 10;
+    }
+    .find-chip {
+        position: absolute;
+        display: inline-flex; align-items: center; gap: 5px;
+        border-radius: 5px; padding: 4px 9px;
+        font-size: 11px; font-weight: 700; color: #fff;
+        white-space: nowrap; pointer-events: auto;
+        box-shadow: 0 2px 8px rgba(15,25,41,.35);
+        cursor: default;
+        transition: opacity .15s;
+        max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+    }
+    .find-chip:hover { opacity: .88; }
+    .find-chip .chip-dot {
+        width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.6); flex-shrink: 0;
+    }
+    .find-chip.BLOCK { background: rgba(220,38,38,.9); }
+    .find-chip.WARN  { background: rgba(234,88,12,.88); }
+    .find-chip.SAFE  { background: rgba(37,99,235,.85); }
+
+    /* PRT download bar */
+    .prt-bar {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 12px;
+        background: #f8fafc; border: 1px solid #e2e7ef; border-radius: 8px;
+        margin-bottom: 10px;
+    }
+    .prt-bar-icon { font-size: 14px; color: #9ba8b7; }
+    .prt-bar-name { flex: 1; font-size: 12.5px; font-weight: 600; color: #374151; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .prt-bar-note { font-size: 11.5px; color: #9ba8b7; white-space: nowrap; }
+
+    .comparison-note { font-size: 12px; color: #9ba8b7; line-height: 1.5; }
+
+    /* ── Review items ── */
+    .item-list { display: grid; gap: 7px; }
+    .item-row {
+        display: flex; align-items: flex-start; gap: 10px;
+        padding: 11px 13px; background: #fff;
+        border: 1px solid #e2e7ef; border-radius: 8px;
+    }
+    .item-type-tag {
+        background: #f0f3f8; border-radius: 5px; padding: 2px 7px;
+        font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+        color: #6b7a90; flex-shrink: 0; margin-top: 1px;
+        white-space: nowrap;
+    }
+    .item-body { flex: 1; min-width: 0; }
+    .item-title { font-weight: 600; font-size: 13px; }
+    .item-desc { color: #6b7a90; font-size: 12px; margin-top: 3px; line-height: 1.5; }
+
+    /* ── Rule results ── */
+    .rule-list { display: grid; gap: 8px; }
+    .rule-card {
+        background: #fff; border: 1px solid #e2e7ef; border-left: 4px solid #e2e7ef;
+        border-radius: 8px; padding: 13px 14px;
+    }
+    .rule-card.SAFE  { border-left-color: #10b981; }
+    .rule-card.WARN  { border-left-color: #f59e0b; }
+    .rule-card.BLOCK { border-left-color: #ef4444; }
+
+    .rule-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .rule-name { font-weight: 700; font-size: 13px; flex: 1; min-width: 0; }
+    .rule-meta { font-size: 11.5px; color: #9ba8b7; margin-bottom: 6px; }
+    .rule-explanation { font-size: 12.5px; color: #4b5568; line-height: 1.6; }
+    .rule-actions { margin-top: 8px; padding-left: 14px; }
+    .rule-actions li { font-size: 12px; color: #374151; margin-bottom: 3px; line-height: 1.5; }
+
+    /* ── Evidence graph ── */
+    .graph-list { display: grid; gap: 6px; }
+    .graph-edge {
+        display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center;
+        background: #fff; border: 1px solid #e2e7ef; border-radius: 7px; padding: 9px 12px;
+    }
+    .graph-node { min-width: 0; }
+    .graph-node-type { font-size: 10px; color: #9ba8b7; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 2px; }
+    .graph-node-label { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .graph-node.right { text-align: right; }
+    .graph-rel {
+        background: #eff6ff; color: #2563eb; border-radius: 5px;
+        padding: 3px 8px; font-size: 10px; font-weight: 700; text-align: center; white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar { display: grid; gap: 12px; }
+
+    .side-card { padding: 16px; }
+    .side-card h2 { font-size: 13.5px; font-weight: 700; margin-bottom: 14px; }
+
+    /* Key-value pairs */
+    .kv { display: grid; gap: 2px; }
+    .kv-row {
+        display: flex; justify-content: space-between; align-items: flex-start;
+        gap: 10px; padding: 7px 0; border-bottom: 1px solid #f0f2f6;
+    }
+    .kv-row:last-child { border-bottom: none; }
+    .kv-key { font-size: 12px; color: #9ba8b7; font-weight: 500; white-space: nowrap; }
+    .kv-val { font-size: 12.5px; font-weight: 600; text-align: right; max-width: 160px; }
+
+    /* 2×2 metric grid */
+    .metrics-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 12px; }
+    .mini-metric {
+        background: #f8fafc; border: 1px solid #ebeef3; border-radius: 8px;
+        padding: 10px; text-align: center;
+    }
+    .mini-metric .value { font-size: 22px; font-weight: 800; letter-spacing: -.02em; color: #0f1929; }
+    .mini-metric .label { margin-top: 3px; }
+
+    /* Finding cards */
+    .finding-card {
+        border: 1px solid #e2e7ef; border-radius: 8px; padding: 12px;
+        margin-bottom: 8px; background: #fafbfc;
+    }
+    .finding-head {
+        display: flex; justify-content: space-between; gap: 8px;
+        align-items: flex-start; margin-bottom: 6px;
+    }
+    .finding-title { font-weight: 700; font-size: 12.5px; line-height: 1.4; }
+    .finding-text { font-size: 12px; color: #4b5568; line-height: 1.55; }
+    .finding-action {
+        margin-top: 7px; padding-top: 7px; border-top: 1px solid #ebeef3;
+        font-size: 11.5px; color: #6b7a90; line-height: 1.4;
+    }
+    .finding-action::before { content: '→ '; color: #9ba8b7; }
+
+    /* Evidence cards */
+    .ev-card {
+        border: 1px solid #e2e7ef; border-radius: 7px; padding: 10px 12px;
+        margin-bottom: 7px; background: #fff;
+    }
+    .ev-type { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #9ba8b7; margin-bottom: 3px; }
+    .ev-title { font-size: 12.5px; font-weight: 600; }
+    .ev-excerpt { font-size: 12px; color: #6b7a90; margin-top: 3px; line-height: 1.5; }
+
+    /* Notes form */
+    .notes-form .label { display: block; margin-bottom: 5px; }
+    .notes-form select { margin-bottom: 10px; }
+    .notes-form textarea { min-height: 100px; }
+    .notes-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+
+    /* ── Rule catalog ── */
+    .catalog-toggle {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px; border-radius: 8px;
+        border: 1.5px solid #e2e7ef; background: #fafbfc;
+        cursor: pointer; font-size: 12px; font-weight: 600; color: #6b7a90;
+        user-select: none; transition: background .13s, color .13s;
+        margin-top: 4px;
+    }
+    .catalog-toggle:hover { background: #f0f3f8; color: #0f1929; }
+    .catalog-arrow { font-size: 10px; transition: transform .2s; }
+    .catalog-arrow.open { transform: rotate(90deg); }
+
+    .catalog-body { margin-top: 10px; }
+    .catalog-group { margin-bottom: 18px; }
+    .catalog-group-head {
+        display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
+    }
+    .catalog-group-name {
+        font-size: 10px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: .07em; color: #9ba8b7;
+    }
+    .catalog-rule {
+        display: flex; align-items: flex-start; gap: 10px;
+        padding: 9px 12px; border-radius: 7px;
+        border: 1px solid #ebeef3; background: #fff;
+        margin-bottom: 5px;
+    }
+    .catalog-sev {
+        flex-shrink: 0; margin-top: 2px;
+        width: 7px; height: 7px; border-radius: 50%;
+    }
+    .catalog-sev.BLOCK { background: #ef4444; }
+    .catalog-sev.WARN  { background: #f59e0b; }
+    .catalog-sev.SAFE  { background: #10b981; }
+    .catalog-rule-name { font-size: 12.5px; font-weight: 600; color: #0f1929; }
+    .catalog-rule-desc { font-size: 11.5px; color: #6b7a90; margin-top: 2px; line-height: 1.5; }
+    .catalog-rule-body { flex: 1; min-width: 0; }
+
+    @media (max-width: 1100px) {
+        .workspace-cols { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 680px) {
+        .ws-title-row { flex-direction: column; }
+        .metric-strip { flex-wrap: wrap; }
+        .graph-edge { grid-template-columns: 1fr; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="workspace">
+
+    <!-- Header -->
+    <div class="ws-header">
+        <div class="crumb">
+            <a href="/design-intake">Drawings</a>
+            <span class="crumb-sep">›</span>
+            {% if session.design_artifact_id %}
+            <a href="/design-artifacts/{{ session.design_artifact_id }}">{{ session.artifact_number }}</a>
+            {% elif session.part_id %}
+            <a href="/parts/{{ session.part_id }}">{{ session.part_name }}</a>
+            {% endif %}
+            <span class="crumb-sep">›</span>
+            <span>Review</span>
+        </div>
+
+        <div class="ws-title-row">
+            <div>
+                <h1>{{ session.title }}</h1>
+                <div class="ws-subtitle">
+                    {{ session.session_number }}
+                    {% if session.artifact_number %}
+                    · {{ session.artifact_type }} · Part {{ session.linked_part_number or "—" }}
+                    {% else %}
+                    · {{ session.vehicle_name or "" }} {{ session.vehicle_model_year or "" }}{% if session.system_name %} · {{ session.system_name }}{% endif %}
+                    {% endif %}
+                </div>
+            </div>
+            <div class="risk-badge {{ session.risk_status }}">
+                <span class="risk-badge-label {{ session.risk_status }}">Risk</span>
+                <span class="risk-badge-value {{ session.risk_status }}">{{ session.risk_status }}</span>
+            </div>
+        </div>
+
+        <div class="metric-strip">
+            <div class="metric-tile">
+                <div class="label">Status</div>
+                <div class="value sm">{{ session.status }}</div>
+            </div>
+            <div class="metric-tile">
+                <div class="label">Revision</div>
+                <div class="value sm">{% if session.design_revision_code %}{{ session.design_revision_code }}{% else %}Rev {{ session.revision_number }}{% endif %}</div>
+            </div>
+            <div class="metric-tile">
+                <div class="label">Findings</div>
+                <div class="value">{{ findings|length }}</div>
+            </div>
+            {% if session.summary_json %}
+            <div class="metric-tile">
+                <div class="label">Entities</div>
+                <div class="value">{{ session.summary_json.drawing_entity_count or session.summary_json.entity_count or 0 }}</div>
+            </div>
+            <div class="metric-tile">
+                <div class="label">Dimensions</div>
+                <div class="value">{{ session.summary_json.drawing_dimension_count or 0 }}</div>
+            </div>
+            <div class="metric-tile">
+                <div class="label">Rule Gaps</div>
+                <div class="value">{{ session.summary_json.validation_result_count or ((session.summary_json.critical_count or 0) + (session.summary_json.warning_count or 0)) }}</div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Main workspace -->
+    <div class="workspace-cols">
+
+        <main>
+            <!-- Drawing Preview -->
+            <div class="card panel">
+                <div class="panel-head">
+                    <span class="panel-title">Drawing Preview</span>
+                </div>
+
+                <!-- PDF with finding chips overlaid -->
+                <div class="pdf-wrap">
+                    {% if drawing_pdf_url %}
+                    <iframe src="{{ drawing_pdf_url }}" title="Revision drawing"></iframe>
+                    {% else %}
+                    <div class="pdf-empty">
+                        <span class="pdf-empty-icon">📄</span>
+                        <span>{{ session.design_source_filename or "PDF not found" }}</span>
+                        <span class="fine">Place file in app/static/drawings</span>
+                    </div>
+                    {% endif %}
+
+                    <!-- Finding chips overlaid on PDF -->
+                    <div class="pdf-overlay">
+                        {% set chip_positions = [
+                            ("30%", "13%"),
+                            ("56%", "19%"),
+                            ("31%", "54%"),
+                            ("64%", "64%")
+                        ] %}
+                        {% for finding in findings[:4] %}
+                        {% set pos = chip_positions[loop.index0] %}
+                        <div class="find-chip {{ finding.status }}"
+                             style="left:{{ pos[0] }}; top:{{ pos[1] }};"
+                             title="{{ finding.explanation }}">
+                            <span class="chip-dot"></span>
+                            {{ finding.title }}
+                        </div>
+                        {% endfor %}
+                        {% if not findings %}
+                        <div class="find-chip SAFE" style="left:8%; top:10%;">
+                            <span class="chip-dot"></span>No findings — reference-ready
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- PRT download bar (shown only when PRT exists) -->
+                {% if drawing_prt_url or drawing_prt_filename %}
+                <div class="prt-bar">
+                    <span class="prt-bar-icon">⬡</span>
+                    <span class="prt-bar-name">{{ drawing_prt_filename or "CAD file" }}</span>
+                    {% if drawing_prt_url %}
+                    <a class="btn btn-ghost btn-sm" href="{{ drawing_prt_url }}" target="_blank">Download PRT ↓</a>
+                    {% else %}
+                    <span class="prt-bar-note">Not in static/drawings</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                {% if session.summary_json and session.summary_json.reference_comparison %}
+                <div class="comparison-note">{{ session.summary_json.reference_comparison.summary }}</div>
+                {% endif %}
+            </div>
+
+            <!-- Review Items -->
+            {% if items %}
+            <div class="card panel">
+                <div class="panel-head">
+                    <span class="panel-title">Review Items</span>
+                    <span class="count-bubble">{{ items|length }}</span>
+                </div>
+                <div class="item-list">
+                    {% for item in items %}
+                    <div class="item-row">
+                        <span class="item-type-tag">{{ item.item_type | replace('_', ' ') }}</span>
+                        <div class="item-body">
+                            <div class="item-title">{{ item.title }}</div>
+                            {% if item.description %}
+                            <div class="item-desc">{{ item.description }}</div>
+                            {% endif %}
+                        </div>
+                        <span class="badge badge-{{ item.risk_status }}" style="flex-shrink:0;">{{ item.risk_status }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Validation Rule Results -->
+            <div class="card panel">
+                <div class="panel-head">
+                    <span class="panel-title">Validation Results</span>
+                    <span class="count-bubble">{{ rule_results|length }}</span>
+                </div>
+                {% if rule_results %}
+                <div class="rule-list">
+                    {% for result in rule_results %}
+                    <div class="rule-card {{ result.status }}">
+                        <div class="rule-head">
+                            <span class="rule-name">{{ result.display_name or result.rule_key }}</span>
+                            <span class="badge badge-{{ result.status }}">{{ result.status }}</span>
+                        </div>
+                        {% if result.rule_group %}
+                        <div class="rule-meta">{{ result.rule_group }}{% if result.confidence %} · {{ result.confidence }}% confidence{% endif %}</div>
+                        {% endif %}
+                        <div class="rule-explanation">{{ result.explanation }}</div>
+                        {% if result.recommended_actions %}
+                        <ul class="rule-actions">
+                            {% for action in result.recommended_actions %}
+                            <li>{{ action }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="empty-box">No validation results for this session.</div>
+                {% endif %}
+            </div>
+
+            <!-- Evidence Graph -->
+            {% if edges %}
+            <div class="card panel">
+                <div class="panel-head">
+                    <span class="panel-title">Evidence Graph</span>
+                    <span class="count-bubble">{{ edges|length }}</span>
+                </div>
+                <div class="graph-list">
+                    {% for edge in edges %}
+                    <div class="graph-edge">
+                        <div class="graph-node">
+                            <div class="graph-node-type">{{ edge.source_type }}</div>
+                            <div class="graph-node-label">{{ edge.source_label }}</div>
+                        </div>
+                        <div class="graph-rel">{{ edge.relationship_type }}</div>
+                        <div class="graph-node right">
+                            <div class="graph-node-type">{{ edge.target_type }}</div>
+                            <div class="graph-node-label">{{ edge.target_label }}</div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Rule Catalog -->
+            {% if all_rules %}
+            <div class="card panel">
+                <div class="catalog-toggle" onclick="toggleCatalog(this)">
+                    <span class="catalog-arrow" id="catalogArrow">▶</span>
+                    Validation Rule Set
+                    <span class="count-bubble" style="margin-left:2px;">{{ all_rules|length }}</span>
+                    <span class="fine" style="margin-left:auto; font-weight:400;">
+                        {{ all_rules|selectattr('severity','eq','BLOCK')|list|length }} BLOCK ·
+                        {{ all_rules|selectattr('severity','eq','WARN')|list|length }} WARN
+                    </span>
+                </div>
+                <div id="catalogBody" class="catalog-body" style="display:none;">
+                    {% set ns = namespace(current_group=None) %}
+                    {% for rule in all_rules %}
+                        {% if rule.rule_group != ns.current_group %}
+                            {% if ns.current_group is not none %}</div>{% endif %}
+                            {% set ns.current_group = rule.rule_group %}
+                            <div class="catalog-group">
+                            <div class="catalog-group-head">
+                                <span class="catalog-group-name">{{ rule.rule_group | replace('_', ' ') }}</span>
+                            </div>
+                        {% endif %}
+                        <div class="catalog-rule">
+                            <span class="catalog-sev {{ rule.severity }}"></span>
+                            <div class="catalog-rule-body">
+                                <div class="catalog-rule-name">{{ rule.display_name }}</div>
+                                <div class="catalog-rule-desc">{{ rule.description }}</div>
+                            </div>
+                            <span class="badge badge-{{ 'BLOCK' if rule.severity == 'BLOCK' else 'WARN' if rule.severity == 'WARN' else 'SAFE' }}">{{ rule.severity }}</span>
+                        </div>
+                    {% endfor %}
+                    {% if ns.current_group is not none %}</div>{% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </main>
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+
+            <!-- Approval Readiness -->
+            <div class="card side-card">
+                <h2>Approval Readiness</h2>
+                <div class="kv">
+                    <div class="kv-row">
+                        <span class="kv-key">Drawing</span>
+                        <span class="kv-val">{{ session.artifact_number or session.part_name }}</span>
+                    </div>
+                    <div class="kv-row">
+                        <span class="kv-key">Title</span>
+                        <span class="kv-val muted" style="font-size:11.5px; font-weight:500;">{{ (session.artifact_title or session.part_name or "—")[:36] }}</span>
+                    </div>
+                    <div class="kv-row">
+                        <span class="kv-key">Revision</span>
+                        <span class="kv-val">{{ session.design_revision_code or ("Rev " ~ session.revision_number) }}</span>
+                    </div>
+                    <div class="kv-row">
+                        <span class="kv-key">Risk</span>
+                        <span class="kv-val"><span class="badge badge-{{ session.risk_status }}">{{ session.risk_status }}</span></span>
+                    </div>
+                </div>
+
+                {% if session.summary_json %}
+                <div class="metrics-2x2">
+                    <div class="mini-metric">
+                        <div class="value">{{ session.summary_json.drawing_entity_count or session.summary_json.entity_count or 0 }}</div>
+                        <div class="label">Entities</div>
+                    </div>
+                    <div class="mini-metric">
+                        <div class="value">{{ session.summary_json.drawing_dimension_count or 0 }}</div>
+                        <div class="label">Dims</div>
+                    </div>
+                    <div class="mini-metric">
+                        <div class="value">{{ session.summary_json.drawing_annotation_count or 0 }}</div>
+                        <div class="label">Notes</div>
+                    </div>
+                    <div class="mini-metric">
+                        <div class="value">{{ session.summary_json.validation_result_count or ((session.summary_json.critical_count or 0) + (session.summary_json.warning_count or 0)) }}</div>
+                        <div class="label">Gaps</div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Explainable Findings -->
+            <div class="card side-card">
+                <h2>Findings</h2>
+                {% if findings %}
+                    {% for finding in findings %}
+                    <div class="finding-card">
+                        <div class="finding-head">
+                            <span class="finding-title">{{ finding.title }}</span>
+                            <span class="badge badge-{{ finding.status }}" style="flex-shrink:0;">{{ finding.status }}</span>
+                        </div>
+                        <div class="finding-text">{{ finding.explanation }}</div>
+                        {% if finding.recommended_action %}
+                        <div class="finding-action">{{ finding.recommended_action }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                <div class="empty-box">No drafting findings generated.</div>
+                {% endif %}
+            </div>
+
+            <!-- Validation Evidence -->
+            {% if evidence %}
+            <div class="card side-card">
+                <h2>Evidence</h2>
+                {% for ev in evidence[:5] %}
+                <div class="ev-card">
+                    <div class="ev-type">{{ ev.evidence_type }}</div>
+                    <div class="ev-title">{{ ev.title }}</div>
+                    {% if ev.excerpt %}
+                    <div class="ev-excerpt">{{ ev.excerpt[:100] }}{% if ev.excerpt|length > 100 %}…{% endif %}</div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Reviewer Notes -->
+            <div class="card side-card">
+                <h2>Reviewer Notes</h2>
+                <form class="notes-form" onsubmit="saveNotes(event)">
+                    <div class="label">Workflow Status</div>
+                    <select id="reviewStatus">
+                        {% for status in ["DRAFT", "IN_REVIEW", "APPROVED", "REJECTED", "CLOSED"] %}
+                        <option value="{{ status }}" {% if session.status == status %}selected{% endif %}>{{ status }}</option>
+                        {% endfor %}
+                    </select>
+                    <div class="label">Notes</div>
+                    <textarea id="reviewerNotes" placeholder="Add notes or overrides…">{{ session.reviewer_notes or "" }}</textarea>
+                    <div class="notes-actions">
+                        <button class="btn btn-primary" type="submit">Save</button>
+                        {% if session.design_artifact_id %}
+                        <a class="btn btn-secondary" href="/design-artifacts/{{ session.design_artifact_id }}">Back to Drawing</a>
+                        {% elif session.part_id %}
+                        <a class="btn btn-secondary" href="/parts/{{ session.part_id }}">Back to Part</a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+
+        </aside>
+    </div>
+</div>
+
+<script>
+function toggleCatalog(el) {
+    const body = document.getElementById('catalogBody');
+    const arrow = document.getElementById('catalogArrow');
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? 'block' : 'none';
+    arrow.textContent = hidden ? '▼' : '▶';
+    arrow.classList.toggle('open', hidden);
+}
+
+async function saveNotes(event) {
+    event.preventDefault();
+    const btn = event.target.querySelector('button[type="submit"]');
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const response = await fetch("/api/reviews/{{ session.id }}/notes", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            status:         document.getElementById("reviewStatus").value,
+            reviewer_notes: document.getElementById("reviewerNotes").value
+        })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+        btn.disabled = false; btn.textContent = orig;
+        alert(payload.detail || payload.error || "Failed to save notes.");
+        return;
+    }
+    window.location.reload();
+}
+</script>
+{% endblock %}

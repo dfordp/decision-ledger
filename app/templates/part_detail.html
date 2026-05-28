@@ -288,6 +288,7 @@
                             <td>
                                 <div class="action-row">
                                     <button class="button-secondary" onclick="analyzeRevision('{{ revision.id }}')">Analyze Impact</button>
+                                    <button class="button-secondary" onclick="createReviewSession('{{ revision.id }}')">Open ReviewGraph</button>
                                     <button class="button" onclick="generateDraft('{{ revision.id }}')">Generate DFMEA Draft</button>
                                 </div>
                             </td>
@@ -444,6 +445,22 @@ async function generateDraft(revisionId) {
     } else {
         window.location.reload();
     }
+}
+
+async function createReviewSession(revisionId) {
+    const response = await fetch(`/api/revisions/${revisionId}/review-session`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({created_by: "system"})
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+        alert(payload.detail || payload.error || "Failed to create ReviewGraph session.");
+        return;
+    }
+
+    window.location.href = payload.redirect_url;
 }
 </script>
 {% endblock %}
