@@ -168,11 +168,14 @@ def wipe_existing_data() -> None:
 
 def reset_rule_catalog() -> None:
     """Replace the engineering_review_rules table with the correct 15 rules."""
-    # Remove any stale rules not in the correct set
+    # Remove any stale general rules not in the correct set.
+    # Segment-specific rules (applies_to_segments != '[]') are left untouched —
+    # they were added by migration 006 and belong to the platform catalog.
     correct_keys = tuple(r[0] for r in CORRECT_RULES)
     execute_query(
         f"DELETE FROM engineering_review_rules WHERE rule_key NOT IN "
-        f"({', '.join('%s' for _ in correct_keys)})",
+        f"({', '.join('%s' for _ in correct_keys)}) "
+        f"AND (applies_to_segments IS NULL OR applies_to_segments = '[]'::jsonb)",
         correct_keys,
     )
 

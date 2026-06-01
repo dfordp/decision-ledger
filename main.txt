@@ -1,1 +1,3 @@
-    python -m scripts.seed_bracket_demo
+docker compose down -v
+docker compose up -d
+docker exec decisionledger_backend python -m scripts.seed_all

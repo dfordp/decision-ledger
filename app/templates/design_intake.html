@@ -26,9 +26,6 @@
         line-height: 1.65;
     }
 
-    /* Layout */
-    .layout { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; }
-
     /* Section heading */
     .sec-head {
         display: flex;
@@ -95,63 +92,7 @@
     .empty-state h3 { font-size: 15px; font-weight: 600; color: #6b7a90; margin-bottom: 6px; }
     .empty-state p { font-size: 13px; line-height: 1.6; }
 
-    /* Schema section (collapsible) */
-    .schema-toggle {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        margin-top: 20px;
-        padding: 10px 14px;
-        border-radius: 8px;
-        border: 1.5px solid #e2e7ef;
-        background: #fafbfc;
-        cursor: pointer;
-        font-size: 12.5px;
-        font-weight: 600;
-        color: #6b7a90;
-        user-select: none;
-        transition: background .13s, color .13s;
-    }
-    .schema-toggle:hover { background: #f0f3f8; color: #0f1929; }
-    .schema-arrow { font-size: 10px; transition: transform .2s; }
-    .schema-arrow.open { transform: rotate(90deg); }
-
-    .schema-body { margin-top: 8px; }
-    .schema-body textarea {
-        min-height: 260px;
-        font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-        font-size: 12px;
-        line-height: 1.5;
-        background: #f8fafc;
-        color: #374151;
-    }
-
-    /* Form panel */
-    .form-card { padding: 20px; }
-    .form-card h2 { font-size: 15px; font-weight: 700; margin-bottom: 18px; color: #0f1929; }
-    .field { margin-bottom: 12px; }
-    .field .label { display: block; margin-bottom: 5px; }
-    .form-actions { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
-    .form-actions .btn { width: 100%; justify-content: center; }
-    .form-or {
-        text-align: center;
-        font-size: 12px;
-        color: #9ba8b7;
-        position: relative;
-    }
-    .form-or::before, .form-or::after {
-        content: '';
-        position: absolute;
-        top: 50%;
-        width: 36%;
-        height: 1px;
-        background: #e2e7ef;
-    }
-    .form-or::before { left: 0; }
-    .form-or::after { right: 0; }
-
     @media (max-width: 900px) {
-        .layout { grid-template-columns: 1fr; }
         .page-head { flex-direction: column; }
     }
 </style>
@@ -167,7 +108,7 @@
         </div>
     </div>
 
-    <div class="layout">
+    <div>
 
         <!-- Artifact list -->
         <main>
@@ -184,14 +125,19 @@
                 {% if artifacts %}
                     {% for artifact in artifacts %}
                     <a class="a-card" href="/design-artifacts/{{ artifact.id }}">
-                        <div class="a-icon">📐</div>
+                        <div class="a-icon">{% if artifact.product_segment == 'POWERTRAIN' %}🔧{% elif artifact.product_segment == 'BATTERY_SYSTEM' %}⚡{% elif artifact.product_segment == 'CHASSIS_STRUCTURE' %}🏗️{% elif artifact.product_segment == 'HVAC_SYSTEMS' %}❄️{% else %}📐{% endif %}</div>
                         <div class="a-body">
                             <div class="a-number">{{ artifact.artifact_number }}</div>
                             <div class="a-title">{{ artifact.title }}</div>
+                            {% if artifact.vehicle_program %}
+                            <div style="font-size:11.5px;color:#6b7a90;margin-bottom:4px;">🚗 {{ artifact.vehicle_program }}</div>
+                            {% endif %}
                             <div class="a-meta">
-                                <span class="badge badge-blue">{{ artifact.artifact_type }}</span>
-                                {% if artifact.linked_part_number %}
-                                <span class="badge badge-purple">{{ artifact.linked_part_number }}</span>
+                                {% if artifact.product_segment %}
+                                <span class="badge" style="background:#eff9f0;color:#1a7a3c;border:1px solid #b3e6c0;">{{ artifact.product_segment | replace("_"," ") }}</span>
+                                {% endif %}
+                                {% if artifact.assembly_family %}
+                                <span class="badge badge-blue">{{ artifact.assembly_family | replace("_"," ") }}</span>
                                 {% endif %}
                                 <span class="a-rev">{{ artifact.revision_count }} rev{{ 's' if artifact.revision_count != 1 else '' }}</span>
                             </div>
@@ -203,125 +149,14 @@
                 <div class="empty-state">
                     <div class="empty-state-icon">📐</div>
                     <h3>No drawing artifacts yet</h3>
-                    <p>Create one from the form, or load the bracket validation demo to see the platform in action.</p>
+                    <p>Run the seed script to load the bracket demo, then upload drawings to create variants.</p>
                 </div>
                 {% endif %}
             </div>
 
-            <!-- Schema reference -->
-            <div class="schema-toggle" onclick="toggleSchema(this)">
-                <span class="schema-arrow" id="schemaArrow">▶</span>
-                Drawing Data JSON Shape Reference
-            </div>
-            <div class="schema-body" id="schemaBody" style="display:none;">
-                <textarea readonly>{{ sample_design_data|tojson(indent=2) }}</textarea>
-            </div>
         </main>
-
-        <!-- Sidebar: create form -->
-        <aside>
-            <div class="card form-card">
-                <h2>New Drawing Artifact</h2>
-                <form onsubmit="createArtifact(event)">
-                    <div class="field">
-                        <span class="label">Drawing Number</span>
-                        <input id="artifact_number" placeholder="e.g. HORN-HSG-2705" value="HORN-HSG-2705" />
-                    </div>
-                    <div class="field">
-                        <span class="label">Title</span>
-                        <input id="title" value="Sheet Metal Mounting Bracket Family" />
-                    </div>
-                    <div class="field">
-                        <span class="label">Type</span>
-                        <select id="artifact_type">
-                            <option value="ENGINEERING_DRAWING">Engineering Drawing</option>
-                            <option value="CAD_MODEL">CAD Model</option>
-                            <option value="SPECIFICATION">Specification</option>
-                            <option value="REDLINE_PACKAGE">Redline Package</option>
-                        </select>
-                    </div>
-                    <div class="field">
-                        <span class="label">Domain</span>
-                        <input id="domain" value="MECHANICAL" />
-                    </div>
-                    <div class="field">
-                        <span class="label">Linked Part Number</span>
-                        <input id="linked_part_number" value="HORN-HSG-2705" />
-                    </div>
-                    <div class="field">
-                        <span class="label">Supplier</span>
-                        <input id="supplier" value="Demo Supplier" />
-                    </div>
-                    <div class="field">
-                        <span class="label">Material</span>
-                        <input id="material" value="CRCA Sheet Metal" />
-                    </div>
-
-                    <div class="form-actions">
-                        <button class="btn btn-primary" type="submit">Create Drawing</button>
-                        <div class="form-or">or</div>
-                        <button class="btn btn-teal" type="button" onclick="seedBracketDemo(this)">
-                            ⬡ &nbsp;Load Bracket Demo
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </aside>
 
     </div>
 </div>
 
-<script>
-function toggleSchema(el) {
-    const body = document.getElementById('schemaBody');
-    const arrow = document.getElementById('schemaArrow');
-    const hidden = body.style.display === 'none';
-    body.style.display = hidden ? 'block' : 'none';
-    arrow.textContent = hidden ? '▼' : '▶';
-    arrow.classList.toggle('open', hidden);
-}
-
-async function createArtifact(event) {
-    event.preventDefault();
-    const btn = event.target.querySelector('button[type="submit"]');
-    const orig = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Creating…';
-    const response = await fetch("/api/design-artifacts", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-            artifact_number: document.getElementById("artifact_number").value,
-            title:           document.getElementById("title").value,
-            artifact_type:   document.getElementById("artifact_type").value,
-            domain:          document.getElementById("domain").value,
-            linked_part_number: document.getElementById("linked_part_number").value,
-            supplier:        document.getElementById("supplier").value,
-            material:        document.getElementById("material").value
-        })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-        btn.disabled = false; btn.textContent = orig;
-        alert(payload.detail || payload.error || "Failed to create artifact.");
-        return;
-    }
-    window.location.href = payload.redirect_url;
-}
-
-async function seedBracketDemo(btn) {
-    const orig = btn.innerHTML;
-    btn.disabled = true; btn.innerHTML = '⏳ &nbsp;Loading…';
-    const response = await fetch("/api/demo/drawing-validation/bracket-variants", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"}
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-        btn.disabled = false; btn.innerHTML = orig;
-        alert(payload.detail || payload.error || "Failed to load demo.");
-        return;
-    }
-    window.location.href = payload.redirect_url;
-}
-</script>
 {% endblock %}

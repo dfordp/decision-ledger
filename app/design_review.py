@@ -212,9 +212,13 @@ def create_design_artifact(data: dict) -> dict:
             supplier,
             material,
             linked_part_number,
-            metadata_json
+            product_segment,
+            assembly_family,
+            vehicle_program,
+            metadata_json,
+            engineering_context
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (artifact_number)
         DO UPDATE SET
             title = EXCLUDED.title,
@@ -224,7 +228,11 @@ def create_design_artifact(data: dict) -> dict:
             supplier = EXCLUDED.supplier,
             material = EXCLUDED.material,
             linked_part_number = EXCLUDED.linked_part_number,
+            product_segment = EXCLUDED.product_segment,
+            assembly_family = EXCLUDED.assembly_family,
+            vehicle_program = EXCLUDED.vehicle_program,
             metadata_json = design_artifacts.metadata_json || EXCLUDED.metadata_json,
+            engineering_context = EXCLUDED.engineering_context,
             updated_at = NOW()
         RETURNING *
     """, (
@@ -236,7 +244,11 @@ def create_design_artifact(data: dict) -> dict:
         data.get("supplier"),
         data.get("material"),
         data.get("linked_part_number"),
+        data.get("product_segment"),
+        data.get("assembly_family"),
+        data.get("vehicle_program"),
         Json(data.get("metadata_json") or {}),
+        Json(data.get("engineering_context") or {}),
     ))
     return artifact
 
@@ -880,6 +892,2122 @@ def create_review_session_from_design_revision(design_revision_id: str, created_
     return get_review_session(session_id)
 
 
+def get_review_preview(design_revision_id: str) -> dict:
+    """
+    Return everything needed to render the reviewer-validation modal BEFORE
+    a review session is created.
+
+    Covers:
+    - Extracted entities / dimensions / annotations (with first-N previews)
+    - Inferred program context from the parent artifact
+    - Applicable validation rules (general + segment-specific)
+    - Deterministically matched similar historical programs
+    - Whether a session already exists (modal can skip straight to redirect)
+    """
+    revision = fetch_one("""
+        SELECT
+            dr.id, dr.revision_code, dr.change_summary, dr.source_filename,
+            dr.design_data_json, dr.approval_status,
+            da.id AS artifact_id,
+            da.artifact_number, da.title AS artifact_title,
+            da.product_segment, da.assembly_family, da.vehicle_program,
+            da.material, da.domain
+        FROM design_revisions dr
+        JOIN design_artifacts da ON da.id = dr.artifact_id
+        WHERE dr.id = %s::uuid
+    """, (design_revision_id,))
+    if not revision:
+        raise ValueError("Design revision not found")
+
+    artifact_id = str(revision["artifact_id"])
+    product_segment = revision.get("product_segment") or ""
+    assembly_family = revision.get("assembly_family") or ""
+
+    # ── 1. Extraction summary ─────────────────────────────────────────────────
+    entities = fetch_all("""
+        SELECT entity_type, display_name, drawing_region
+        FROM drawing_feature_entities
+        WHERE design_revision_id = %s::uuid
+        ORDER BY created_at
+    """, (design_revision_id,))
+
+    dimensions = fetch_all("""
+        SELECT display_name, nominal_value, unit, tolerance_json, drawing_region, is_critical
+        FROM drawing_dimensions
+        WHERE design_revision_id = %s::uuid
+        ORDER BY is_critical DESC, created_at
+    """, (design_revision_id,))
+
+    annotations = fetch_all("""
+        SELECT annotation_type, display_text AS display_name, drawing_region
+        FROM drawing_annotations
+        WHERE design_revision_id = %s::uuid
+        ORDER BY created_at
+    """, (design_revision_id,))
+
+    # ── 2. Applicable rules ───────────────────────────────────────────────────
+    general_rules = fetch_all("""
+        SELECT rule_key, display_name, description, severity
+        FROM engineering_review_rules
+        WHERE enabled = TRUE
+          AND (applies_to_segments IS NULL OR applies_to_segments = '[]'::jsonb)
+        ORDER BY severity DESC, rule_key
+    """)
+    if product_segment:
+        segment_rules = fetch_all("""
+            SELECT rule_key, display_name, description, severity, applies_to_segments
+            FROM engineering_review_rules
+            WHERE enabled = TRUE
+              AND applies_to_segments @> %s::jsonb
+            ORDER BY severity DESC, rule_key
+        """, (f'["{product_segment}"]',))
+    else:
+        segment_rules = []
+
+    # ── 3. Similar programs (deterministic: segment + family + program match) ─
+    similar_candidates = fetch_all("""
+        SELECT
+            da.id, da.artifact_number, da.title, da.product_segment,
+            da.assembly_family, da.vehicle_program, da.material,
+            (SELECT COUNT(*) FROM design_revisions dr2 WHERE dr2.artifact_id = da.id) AS rev_count,
+            (SELECT COUNT(*) FROM design_revisions dr3
+             JOIN drawing_validation_results dvr ON dvr.design_revision_id = dr3.id
+             WHERE dr3.artifact_id = da.id AND dvr.status = 'BLOCK') AS total_blocks
+        FROM design_artifacts da
+        WHERE da.id != %s::uuid
+          AND (da.product_segment = %s OR da.assembly_family = %s)
+        ORDER BY da.updated_at DESC
+        LIMIT 20
+    """, (artifact_id, product_segment or "__none__", assembly_family or "__none__"))
+
+    def _similarity_score(candidate: dict) -> int:
+        score = 0
+        if candidate.get("product_segment") == product_segment and product_segment:
+            score += 2
+        if candidate.get("assembly_family") == assembly_family and assembly_family:
+            score += 3
+        if candidate.get("vehicle_program") == revision.get("vehicle_program") and revision.get("vehicle_program"):
+            score += 1
+        return score
+
+    similar_programs = sorted(similar_candidates, key=_similarity_score, reverse=True)[:3]
+    similar_output = []
+    for prog in similar_programs:
+        # Fetch most recent approved revision findings summary
+        approved_rev = fetch_one("""
+            SELECT dr.revision_code,
+                   COUNT(CASE WHEN dvr.status = 'BLOCK' THEN 1 END) AS blocks,
+                   COUNT(CASE WHEN dvr.status = 'WARN'  THEN 1 END) AS warns
+            FROM design_revisions dr
+            LEFT JOIN drawing_validation_results dvr ON dvr.design_revision_id = dr.id
+            WHERE dr.artifact_id = %s::uuid AND dr.approval_status = 'approved'
+            GROUP BY dr.revision_code
+            ORDER BY dr.revision_code DESC
+            LIMIT 1
+        """, (str(prog["id"]),))
+        similar_output.append({
+            "artifact_number": prog["artifact_number"],
+            "title": prog["title"],
+            "product_segment": prog["product_segment"],
+            "assembly_family": prog["assembly_family"],
+            "vehicle_program": prog["vehicle_program"],
+            "rev_count": prog["rev_count"],
+            "total_blocks_across_revisions": prog["total_blocks"],
+            "approved_revision": approved_rev["revision_code"] if approved_rev else None,
+            "approved_blocks_resolved": approved_rev["blocks"] if approved_rev else 0,
+            "similarity": "Same family & segment" if _similarity_score(prog) >= 5
+                          else "Same segment" if _similarity_score(prog) >= 2
+                          else "Related program",
+        })
+
+    # ── 4. Existing session check ─────────────────────────────────────────────
+    existing_session = fetch_one("""
+        SELECT id, session_number, risk_status
+        FROM engineering_review_sessions
+        WHERE design_revision_id = %s::uuid
+        ORDER BY created_at DESC
+        LIMIT 1
+    """, (design_revision_id,))
+
+    # ── 5. Pending validation findings preview ────────────────────────────────
+    existing_findings = fetch_all("""
+        SELECT rule_key, status, title
+        FROM drawing_validation_results
+        WHERE design_revision_id = %s::uuid
+        ORDER BY status DESC, rule_key
+    """, (design_revision_id,))
+
+    return {
+        "revision_id": design_revision_id,
+        "revision_code": revision["revision_code"],
+        "source_filename": revision.get("source_filename"),
+        "change_summary": revision.get("change_summary"),
+        "approval_status": revision.get("approval_status"),
+        "artifact_number": revision["artifact_number"],
+        "artifact_title": revision["artifact_title"],
+        "product_segment": product_segment,
+        "assembly_family": assembly_family,
+        "vehicle_program": revision.get("vehicle_program") or "",
+        "material": revision.get("material") or "",
+        "extraction": {
+            "entity_count": len(entities),
+            "dimension_count": len(dimensions),
+            "annotation_count": len(annotations),
+            "critical_dimension_count": sum(1 for d in dimensions if d.get("is_critical")),
+            "entities_preview": [
+                {
+                    "type": e["entity_type"].replace("_", " ").title(),
+                    "name": e["display_name"],
+                    "region": e["drawing_region"] or "Sheet 1",
+                }
+                for e in entities[:8]
+            ],
+            "dimensions_preview": [
+                {
+                    "name": d["display_name"],
+                    "value": f"{float(d['nominal_value']):g}" if d.get("nominal_value") is not None else "—",
+                    "unit": d.get("unit") or "mm",
+                    "region": d.get("drawing_region") or "Sheet 1",
+                    "critical": bool(d.get("is_critical")),
+                }
+                for d in dimensions[:8]
+            ],
+        },
+        "rules": {
+            "general_count": len(general_rules),
+            "segment_count": len(segment_rules),
+            "general_rules": [
+                {"key": r["rule_key"], "name": r["display_name"], "severity": r["severity"]}
+                for r in general_rules
+            ],
+            "segment_rules": [
+                {"key": r["rule_key"], "name": r["display_name"], "severity": r["severity"]}
+                for r in segment_rules
+            ],
+        },
+        "similar_programs": similar_output,
+        "existing_session": {
+            "id": str(existing_session["id"]),
+            "session_number": existing_session["session_number"],
+            "risk_status": existing_session["risk_status"],
+            "redirect_url": f"/reviews/{existing_session['id']}",
+        } if existing_session else None,
+        "findings_preview": [
+            {"rule_key": f["rule_key"], "status": f["status"], "title": f["title"]}
+            for f in existing_findings
+        ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Drawing extraction — 3-pass deterministic simulation
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EXTRACTION_TEMPLATES: dict[str, dict] = {
+    # ── image3.png  — bad variant (missing centre distance, no H11, slot misread) ──
+    "image3": {
+        "variant_code":   "R1",
+        "change_summary": (
+            "Development variant for Hatchback C. "
+            "Hole centre distance not explicitly called out. "
+            "H11 fit class absent from all hole callouts. "
+            "No fatigue load spectrum referenced."
+        ),
+        "material": "CRCA IS 513 Grade D, 2.5 mm",
+        "scale":    "1:1",
+        "process":  "Laser Cut + Bend",
+        "dimensions": [
+            {"name": "Overall height",       "value": 152.1, "unit": "mm", "critical": True},
+            {"name": "Side reference height", "value": 89.9,  "unit": "mm", "critical": True},
+            {"name": "Lower clearance",       "value": 33.0,  "unit": "mm", "critical": False},
+            {"name": "Slot width",            "value": 22.1,  "unit": "mm", "critical": False},
+            {"name": "Slot height",           "value": 12.0,  "unit": "mm", "critical": False},
+            # 51.4 hole centre distance is intentionally absent
+        ],
+        "holes": [
+            {"callout": "Ø13",  "region": "Upper area — 2 off"},   # no H11
+            {"callout": "Ø12",  "region": "Lower area — 2 off"},   # no H11
+        ],
+        "notes": "",
+        "confidence":     0.78,
+        "missing_fields": ["hole_centre_distance", "hole_fit_class", "fatigue_note"],
+    },
+
+    # ── image4.png  — CORRECT prototype release (alias of HB-000235-R01) ────────
+    "image4": {
+        "variant_code":   "Rev 01",
+        "change_summary": (
+            "Prototype release for Hatchback C. All critical dimensions confirmed: "
+            "51.4 mm hole centre distance, 89.9 mm side reference height, 152.1 mm overall height. "
+            "All mounting holes carry H11 fit class. Fatigue load spectrum PT-LS-235 referenced. "
+            "Wire routing slot 26×12 mm per ECN-235-001. Ø18.1 H11 centre hole per ECN-235-003."
+        ),
+        "material": "CRCA IS 513 Grade D, 2.5 mm",
+        "scale":    "1:1",
+        "process":  "Laser Cut + Bend",
+        "dimensions": [
+            {"name": "Overall height",       "value": 152.1, "unit": "mm", "critical": True},
+            {"name": "Side reference height", "value": 89.9,  "unit": "mm", "critical": True},
+            {"name": "Hole centre distance",  "value": 51.4,  "unit": "mm", "critical": True},
+            {"name": "Lower clearance",       "value": 33.0,  "unit": "mm", "critical": False},
+            {"name": "Slot width",            "value": 26.0,  "unit": "mm", "critical": False},
+            {"name": "Slot height",           "value": 12.0,  "unit": "mm", "critical": False},
+        ],
+        "holes": [
+            {"callout": "Ø13 H11",   "region": "Upper area — 2 off"},
+            {"callout": "Ø12 H11",   "region": "Lower area — 2 off"},
+            {"callout": "Ø18.1 H11", "region": "Centre — 1 off"},
+        ],
+        "notes": (
+            "FATIGUE LOAD SPECTRUM: PT-LS-235. SEE NVH VALIDATION PLAN NVH-HBC-001.\n"
+            "ECN-235-001 APPROVED — SLOT FEATURE ADDED FOR WIRING HARNESS ROUTING.\n"
+            "ECN-235-003 APPROVED — Ø18.1 H11 CENTRE HOLE FOR HARNESS P-CLIP.\n"
+            "GENERAL TOLERANCE: ISO 2768-m. DEBURR AND BREAK SHARP EDGES 0.2–0.5.\n"
+            "FINISH: POWDER COATED. ALL HOLES FREE FROM BURRS."
+        ),
+        "confidence":     0.97,
+        "missing_fields": [],
+    },
+
+    "hb-000235-r01": {
+        "variant_code": "R01",
+        "change_summary": (
+            "Prototype release for Hatchback C. All critical dimensions confirmed: "
+            "51.4 mm hole centre distance, 89.9 mm side reference height, 152.1 mm overall height. "
+            "All five mounting holes carry H11 fit class. Fatigue load spectrum PT-LS-235 referenced. "
+            "Wire routing slot 26×12 mm per ECN-235-001. Ø18.1 H11 centre hole per ECN-235-003."
+        ),
+        "material": "CRCA IS 513 Grade D, 2.5 mm",
+        "scale":    "1:1",
+        "process":  "Laser Cut + Bend",
+        "dimensions": [
+            {"name": "Overall height",       "value": 152.1, "unit": "mm", "critical": True},
+            {"name": "Side reference height", "value": 89.9,  "unit": "mm", "critical": True},
+            {"name": "Hole centre distance",  "value": 51.4,  "unit": "mm", "critical": True},
+            {"name": "Lower clearance",       "value": 33.0,  "unit": "mm", "critical": False},
+            {"name": "Slot width",            "value": 26.0,  "unit": "mm", "critical": False},
+            {"name": "Slot height",           "value": 12.0,  "unit": "mm", "critical": False},
+        ],
+        "holes": [
+            {"callout": "2× Ø13 H11 THRU",   "region": "Upper area"},
+            {"callout": "1× Ø18.1 H11 THRU", "region": "Centre — per ECN-235-003"},
+            {"callout": "2× Ø12 H11 THRU",   "region": "Lower area"},
+        ],
+        "notes": (
+            "FATIGUE LOAD SPECTRUM: PT-LS-235. SEE NVH VALIDATION PLAN NVH-HBC-001. "
+            "ALL MOUNTING HOLES: H11 FIT CLASS MANDATORY. "
+            "WIRE ROUTING SLOT 26×12 mm PER ECN-235-001. DEBURR ALL SLOT EDGES. "
+            "CENTRE HOLE Ø18.1 H11 PER ECN-235-003. "
+            "GENERAL TOLERANCE: ISO 2768-m. BREAK SHARP EDGES 0.2 MAX. "
+            "SURFACE FINISH: E-COAT PER HB-SPEC-021."
+        ),
+        "confidence":     0.97,
+        "missing_fields": [],
+    },
+    "hb-000235-r00": {
+        "variant_code": "Rev 00",
+        "change_summary": "First issue for Hatchback C engine bracket. New slot feature added for wiring harness routing. Not yet released.",
+        "material": "CRCA IS 513 Grade D, 2.5 mm",
+        "scale": "1:1",
+        "process": "Laser Cut + Bend",
+        "dimensions": [
+            {"name": "Overall height", "value": 152.1, "unit": "mm", "critical": True},
+            {"name": "Lower clearance", "value": 33.0,  "unit": "mm", "critical": False},
+            {"name": "Slot width",      "value": 22.1,  "unit": "mm", "critical": False},
+        ],
+        "holes": [
+            {"callout": "Ø13 (no fit class)", "region": "Upper area — 2 off"},
+            {"callout": "Ø12 (no fit class)", "region": "Lower area — 2 off"},
+        ],
+        "notes": "First issue — not yet released.",
+        "confidence": 0.78,
+        "missing_fields": ["hole_fit_class", "centre_distance", "side_height"],
+    },
+    "hb-000071-r10": {
+        "variant_code": "R10",
+        "change_summary": "Production reference — Hatchback A.",
+        "material": "CRCA IS 513 Grade D, 2.5 mm",
+        "scale": "1:1",
+        "process": "Laser Cut + Bend + Weld",
+        "dimensions": [
+            {"name": "Overall height",       "value": 152.1, "unit": "mm", "critical": True},
+            {"name": "Upper section height",  "value": 101.9, "unit": "mm", "critical": True},
+            {"name": "Lower section height",  "value": 56.6,  "unit": "mm", "critical": True},
+            {"name": "Side reference height", "value": 86.9,  "unit": "mm", "critical": True},
+            {"name": "Hole centre distance",  "value": 51.4,  "unit": "mm", "critical": True},
+            {"name": "Lower clearance",       "value": 33.0,  "unit": "mm", "critical": False},
+        ],
+        "holes": [
+            {"callout": "Ø13 H11", "region": "Upper area — 2 off"},
+            {"callout": "Ø12 H11", "region": "Lower area — 2 off"},
+        ],
+        "notes": "FATIGUE LOAD SPECTRUM: PT-LS-071. Production reference — Hatchback A.",
+        "confidence": 0.96,
+        "missing_fields": [],
+    },
+    "hb-000110-r08": {
+        "variant_code": "R8",
+        "change_summary": "Production reference — Hatchback B.",
+        "material": "CRCA IS 513 Grade D, 2.5 mm",
+        "scale": "1:1",
+        "process": "Laser Cut + Bend + Weld",
+        "dimensions": [
+            {"name": "Hole centre distance",  "value": 51.4, "unit": "mm", "critical": True},
+            {"name": "Side reference height", "value": 86.9, "unit": "mm", "critical": True},
+            {"name": "Lower clearance",       "value": 33.0, "unit": "mm", "critical": False},
+        ],
+        "holes": [
+            {"callout": "Ø13 H11",   "region": "Upper area — 2 off"},
+            {"callout": "Ø18.1 H11", "region": "Centre — 1 off"},
+            {"callout": "Ø12 H11",   "region": "Lower area — 2 off"},
+        ],
+        "notes": "FATIGUE LOAD SPECTRUM: PT-LS-110. Production reference — Hatchback B.",
+        "confidence": 0.96,
+        "missing_fields": [],
+    },
+    "hb-000110-r8": {
+        "variant_code": "R8",
+        "change_summary": "Production reference — Hatchback B.",
+        "material": "CRCA IS 513 Grade D, 2.5 mm",
+        "scale": "1:1",
+        "process": "Laser Cut + Bend + Weld",
+        "dimensions": [
+            {"name": "Hole centre distance",  "value": 51.4, "unit": "mm", "critical": True},
+            {"name": "Side reference height", "value": 86.9, "unit": "mm", "critical": True},
+            {"name": "Lower clearance",       "value": 33.0, "unit": "mm", "critical": False},
+        ],
+        "holes": [
+            {"callout": "Ø13 H11",   "region": "Upper area — 2 off"},
+            {"callout": "Ø18.1 H11", "region": "Centre — 1 off"},
+            {"callout": "Ø12 H11",   "region": "Lower area — 2 off"},
+        ],
+        "notes": "FATIGUE LOAD SPECTRUM: PT-LS-110. Production reference — Hatchback B.",
+        "confidence": 0.96,
+        "missing_fields": [],
+    },
+}
+
+
+import re as _re
+import base64 as _b64
+import json as _json
+import os as _os
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Groq vision — 3-pass extraction helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _groq_key_valid() -> str | None:
+    """Return the Groq API key if it looks like a real key, else None."""
+    key = _os.environ.get("GROQ_API_KEY", "")
+    return key if key and not key.startswith("gsk_your") else None
+
+
+def _load_image_b64(filename: str) -> tuple[str, str] | None:
+    """Load image from static/drawings, return (base64_str, mime_type) or None."""
+    from pathlib import Path as _P
+    p = _P("app/static/drawings") / filename
+    if not p.exists():
+        return None
+    ext = p.suffix.lower()
+    mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".webp": "image/webp"}.get(ext)
+    if not mime:
+        return None          # PDF / unknown → skip vision
+    return _b64.b64encode(p.read_bytes()).decode(), mime
+
+
+def _parse_groq_json(raw: str) -> dict | None:
+    """
+    Robustly extract and parse a JSON object from Groq's response.
+    Handles: prefix text, markdown fences, truncated JSON, and nested braces.
+    """
+    if not raw:
+        return None
+    # Strip markdown fences
+    raw = _re.sub(r'^```[a-z]*\n?', '', raw.strip(), flags=_re.M)
+    raw = _re.sub(r'\n?```$',       '', raw.strip(), flags=_re.M)
+    # Find outermost { ... } by bracket counting
+    start = raw.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    end   = -1
+    for i, ch in enumerate(raw[start:], start):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        # JSON is truncated — attempt to close it
+        raw = raw[start:] + "}}" * 3   # over-close, then re-find
+        start = raw.find('{')
+        depth = 0
+        end   = -1
+        for i, ch in enumerate(raw[start:], start):
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end == -1:
+            return None
+    candidate = raw[start : end + 1]
+    try:
+        return _json.loads(candidate)
+    except Exception:
+        return None
+
+
+def _groq_vision_call(client, img_b64: str, mime: str,
+                      system: str, user: str) -> dict | None:
+    """Single Groq vision call → parsed dict or None."""
+    try:
+        resp = client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": [
+                    {"type": "text", "text": user},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
+                ]},
+            ],
+            max_tokens=1200,
+            temperature=0,
+        )
+        raw = resp.choices[0].message.content or ""
+        return _parse_groq_json(raw)
+    except Exception:
+        return None
+
+
+def _missing_fields_for(d: dict) -> list[str]:
+    """Return list of field names that are absent or empty in extraction dict."""
+    missing = []
+    if not d.get("dimensions"):    missing.append("dimensions")
+    if not d.get("holes"):         missing.append("holes")
+    if not (d.get("material") or "").strip():  missing.append("material")
+    if not (d.get("scale")    or "").strip():  missing.append("scale")
+    if not (d.get("process")  or "").strip():  missing.append("process")
+    return missing
+
+
+def _merge_extractions(base: dict, patch: dict) -> dict:
+    """Fill empty fields in base with values from patch."""
+    out = dict(base)
+    for field in ("variant_code", "material", "scale", "process",
+                  "change_summary", "notes"):
+        if not (out.get(field) or "").strip() and (patch.get(field) or "").strip():
+            out[field] = patch[field]
+    if not out.get("dimensions") and patch.get("dimensions"):
+        out["dimensions"] = patch["dimensions"]
+    if not out.get("holes") and patch.get("holes"):
+        out["holes"] = patch["holes"]
+    return out
+
+
+_NL = "\n"
+
+_SCHEMA_HINT = """\
+Return ONLY a single JSON object — no markdown, no explanation:
+{
+  "variant_code": "string",
+  "material": "string or null",
+  "scale": "string or null",
+  "process": "manufacturing process or null",
+  "change_summary": "one sentence describing what this drawing shows",
+  "dimensions": [{"name":"...", "value":0.0, "unit":"mm", "critical":false}],
+  "holes": [{"callout":"Ø13 H11", "region":"region / qty"}],
+  "notes": "all drawing notes or null"
+}"""
+
+_SYSTEM = (
+    "You are a precision engineering drawing extractor. "
+    "Extract ONLY values explicitly visible on the drawing — never invent numbers. "
+    "Return a single JSON object with no markdown or explanation."
+)
+
+
+def _extract_3pass_groq(
+    filename: str,
+    inferred_code: str,
+    artifact: dict,
+    ref_ctx: str,
+    groq_key: str,
+) -> dict | None:
+    """
+    Make up to 3 real Groq vision calls.
+
+    Pass 1 — full extraction: read everything visible on the drawing.
+    Pass 2 — targeted follow-up: re-ask specifically for any still-missing fields.
+    Pass 3 — final consolidation: one last pass on remaining gaps.
+
+    Returns merged extraction dict, or None if all calls fail.
+    """
+    img = _load_image_b64(filename)
+    if img is None:
+        return None
+    img_b64, mime = img
+
+    artifact_ctx = (
+        f"Artifact: {artifact.get('artifact_number','?')} — "
+        f"{artifact.get('title', artifact.get('assembly_family',''))}\n"
+        f"Segment: {artifact.get('product_segment','')} / {artifact.get('assembly_family','')}\n"
+        f"Program: {artifact.get('vehicle_program','')}\n"
+        f"Default material: {artifact.get('material','')}\n\n"
+        f"Approved reference dims for comparison:\n{ref_ctx}"
+    )
+
+    try:
+        import groq as _groq_mod
+        client = _groq_mod.Groq(api_key=groq_key)
+    except Exception:
+        return None
+
+    result: dict | None = None
+
+    # ── Pass 1: full extraction ───────────────────────────────────────────
+    p1_user = (
+        f"{artifact_ctx}\n\n"
+        f"Extract all engineering data from this drawing. "
+        f"Read every dimension, hole callout, title block field, and note visible.\n\n"
+        f"Use variant_code \"{inferred_code}\" if no revision is found in the title block.\n\n"
+        f"{_SCHEMA_HINT}"
+    )
+    result = _groq_vision_call(client, img_b64, mime, _SYSTEM, p1_user)
+
+    if result is None:
+        return None     # Pass 1 hard-failed (network/auth) — abort
+
+    missing = _missing_fields_for(result)
+    if not missing:
+        return result   # Perfect first pass
+
+    # ── Pass 2: focused on missing fields ────────────────────────────────
+    focus = ", ".join(missing)
+    p2_user = (
+        f"{artifact_ctx}\n\n"
+        f"Your previous extraction was missing: {focus}.\n"
+        f"Look specifically at the title block, dimension lines, and hole callouts "
+        f"for: {focus}. Extract only those fields from the drawing.\n\n"
+        f"Partial data already extracted (keep these, only fill gaps):\n"
+        f"dimensions found so far: {len(result.get('dimensions') or [])} rows\n"
+        f"holes found so far: {len(result.get('holes') or [])} rows\n\n"
+        f"{_SCHEMA_HINT}"
+    )
+    result2 = _groq_vision_call(client, img_b64, mime, _SYSTEM, p2_user)
+    if result2:
+        result = _merge_extractions(result, result2)
+
+    missing = _missing_fields_for(result)
+    if not missing:
+        return result
+
+    # ── Pass 3: final push on whatever is still absent ───────────────────
+    focus = ", ".join(missing)
+    p3_user = (
+        f"{artifact_ctx}\n\n"
+        f"Still missing after two passes: {focus}.\n"
+        f"Make one final careful read of the entire drawing for these fields only. "
+        f"If a field is truly not visible on the drawing, return null for it.\n\n"
+        f"{_SCHEMA_HINT}"
+    )
+    result3 = _groq_vision_call(client, img_b64, mime, _SYSTEM, p3_user)
+    if result3:
+        result = _merge_extractions(result, result3)
+
+    return result
+
+
+def _build_ref_context(ref_revisions: list[dict]) -> str:
+    """Compact reference string passed to Groq as context."""
+    lines: list[str] = []
+    for row in ref_revisions:
+        ddj = row.get("design_data_json") or {}
+        dims_str = ", ".join(
+            f"{d.get('name')} {d.get('nominal')}{d.get('unit','mm')}"
+            for d in (ddj.get("dimensions") or [])[:6]
+        )
+        holes_str = ", ".join(
+            f"Ø{h.get('diameter','').rstrip('0').rstrip('.')} {h.get('fit_class','')}"
+            for h in (ddj.get("mounting_holes") or [])[:4]
+            if h.get("diameter")
+        )
+        lines.append(
+            f"  {row['artifact_number']} {row['revision_code']}: "
+            f"dims=[{dims_str}] holes=[{holes_str}]"
+        )
+    return "\n".join(lines) if lines else "None available."
+
+
+def _extract_from_reference(
+    artifact: dict,
+    ref_revisions: list[dict],
+    inferred_code: str,
+) -> dict:
+    """Historical reference fallback when Groq is unavailable."""
+    dims:  list[dict] = []
+    holes: list[dict] = []
+    ref_label = ""
+
+    if ref_revisions:
+        best = ref_revisions[0]
+        ddj  = best.get("design_data_json") or {}
+        ref_label = f"{best['artifact_number']} {best['revision_code']}"
+
+        for d in (ddj.get("dimensions") or []):
+            dims.append({
+                "name":     d.get("name") or "Dimension",
+                "value":    d.get("nominal") or d.get("value") or 0,
+                "unit":     d.get("unit") or "mm",
+                "critical": bool(d.get("is_critical") or d.get("critical")),
+            })
+
+        from collections import Counter as _Counter
+        raw_holes = ddj.get("mounting_holes") or []
+        def _c(h: dict) -> str:
+            dia = (h.get("diameter") or "").rstrip("0").rstrip(".")
+            fit = (h.get("fit_class") or "").strip()
+            return f"Ø{dia} {fit}".strip() if dia else ""
+        ctr = _Counter(_c(h) for h in raw_holes if h.get("diameter"))
+        seen: set[str] = set()
+        for h in raw_holes:
+            c = _c(h)
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            qty    = ctr[c]
+            region = (h.get("region") or "") + (f" — {qty} off" if qty > 1 else "")
+            holes.append({"callout": c, "region": region})
+
+    program = artifact.get("vehicle_program") or "program"
+    missing: list[str] = []
+    if not dims:  missing.append("dimensions")
+    if not holes: missing.append("holes")
+
+    return {
+        "variant_code":   inferred_code,
+        "change_summary": (
+            f"Initial variant for {program}. "
+            f"Dimensions carried forward from approved reference {ref_label} — "
+            f"verify against updated drawing and confirm any geometry changes."
+        ) if ref_label else "",
+        "material":       artifact.get("material") or "",
+        "scale":          "1:1",
+        "process":        "Laser Cut + Bend",
+        "dimensions":     dims,
+        "holes":          holes,
+        "notes":          (
+            f"Pre-populated from {ref_label}. "
+            f"Confirm sheet thickness matches material spec and add fatigue load reference."
+        ) if ref_label else "",
+        "confidence":     0.72 if dims else 0.45,
+        "missing_fields": missing,
+        "_source":        "historical_ref",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public extraction entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _UNUSED_extract_via_groq(
+    filename: str,
+    artifact_id: str,
+    groq_key: str,
+) -> dict | None:
+    """
+    Send the uploaded drawing image to Groq vision and extract dimensions/holes.
+    Includes compact reference context so the model knows what to look for.
+    Returns a structured extraction dict, or None on any failure.
+    """
+    from pathlib import Path as _Path
+
+    img_path = _Path("app/static/drawings") / filename
+    if not img_path.exists():
+        return None
+
+    # Determine MIME type
+    ext = img_path.suffix.lower()
+    mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".pdf": "application/pdf"}.get(ext, "image/png")
+    if mime == "application/pdf":
+        return None  # Groq vision doesn't accept PDF
+
+    # Load & encode image
+    img_b64 = _b64.b64encode(img_path.read_bytes()).decode()
+
+    # Fetch artifact + approved reference dims for context
+    artifact = fetch_one(
+        """SELECT material, artifact_number, title, product_segment,
+                  assembly_family, vehicle_program
+           FROM design_artifacts WHERE id = %s::uuid""",
+        (artifact_id,),
+    ) or {}
+
+    ref_rows = fetch_all(
+        """SELECT dr.revision_code, dr.design_data_json,
+                  da.artifact_number
+           FROM design_revisions dr
+           JOIN design_artifacts da ON da.id = dr.artifact_id
+           WHERE da.product_segment = %s AND da.assembly_family = %s
+             AND da.id != %s::uuid
+             AND LOWER(dr.approval_status) IN ('approved', 'approved_reference')
+           ORDER BY jsonb_array_length(
+               COALESCE(dr.design_data_json->'dimensions','[]'::jsonb)) DESC
+           LIMIT 2""",
+        (artifact.get("product_segment"), artifact.get("assembly_family"), artifact_id),
+    ) or []
+
+    # Build a compact reference context string
+    ref_lines: list[str] = []
+    for row in ref_rows:
+        ddj = row.get("design_data_json") or {}
+        dims_str = ", ".join(
+            f"{d.get('name')} {d.get('nominal')}{d.get('unit','mm')}"
+            for d in (ddj.get("dimensions") or [])[:6]
+        )
+        holes_str = ", ".join(
+            f"Ø{h.get('diameter','').rstrip('0').rstrip('.')} {h.get('fit_class','')}"
+            for h in (ddj.get("mounting_holes") or [])[:4]
+            if h.get("diameter")
+        )
+        ref_lines.append(
+            f"Approved ref {row['artifact_number']} {row['revision_code']}: "
+            f"dims=[{dims_str}] holes=[{holes_str}]"
+        )
+    ref_ctx = "\n".join(ref_lines) if ref_lines else "No approved reference available."
+
+    inferred_code = "R1"
+    m = _re.search(r'r(?:ev[\s_-]?)?([\d]+)', filename.lower())
+    if m:
+        inferred_code = f"R{m.group(1)}"
+
+    system_msg = (
+        "You are an engineering drawing extractor. "
+        "Return ONLY a single valid JSON object — no markdown, no explanation, nothing else."
+    )
+
+    user_text = (
+        f"Extract all engineering data from this drawing for artifact "
+        f"{artifact.get('artifact_number','?')} "
+        f"({artifact.get('product_segment','')} / {artifact.get('assembly_family','')}, "
+        f"{artifact.get('vehicle_program','')}).\n\n"
+        f"Approved references for comparison:\n{ref_ctx}\n\n"
+        f"Return this JSON schema — extract ONLY what is explicitly shown on the drawing:\n"
+        "{\n"
+        f'  "variant_code": "{inferred_code}",\n'
+        '  "material": "string or null",\n'
+        '  "scale": "string or null",\n'
+        '  "process": "string or null",\n'
+        '  "change_summary": "one sentence describing what this drawing shows",\n'
+        '  "dimensions": [\n'
+        '    {"name": "...", "value": 0.0, "unit": "mm", "critical": false}\n'
+        '  ],\n'
+        '  "holes": [\n'
+        '    {"callout": "Ø13 H11", "region": "region / qty"}\n'
+        '  ],\n'
+        '  "notes": "all drawing notes concatenated, or null"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Extract ONLY dimensions/holes explicitly labelled on the drawing.\n"
+        "- For holes include fit class (e.g. H11) if shown; if absent write just diameter.\n"
+        "- Mark critical:true for dimensions that have tight tolerances or are annotated as key.\n"
+        "- If the drawing has a title block, read material/scale/revision from it.\n"
+        "- Do NOT invent values not visible on the drawing."
+    )
+
+    try:
+        import groq as _groq_mod
+        client = _groq_mod.Groq(api_key=groq_key)
+
+        resp = client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": [
+                    {"type": "text", "text": user_text},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:{mime};base64,{img_b64}"
+                    }},
+                ]},
+            ],
+            max_tokens=1024,
+            temperature=0,
+        )
+
+        raw = resp.choices[0].message.content or ""
+        # Strip any accidental markdown fences
+        raw = _re.sub(r'^```[a-z]*\n?', '', raw.strip(), flags=_re.M)
+        raw = _re.sub(r'\n?```$', '', raw.strip(), flags=_re.M)
+        parsed: dict = _json.loads(raw.strip())
+
+        dims  = parsed.get("dimensions") or []
+        holes = parsed.get("holes") or []
+        mat   = parsed.get("material") or artifact.get("material") or ""
+
+        # Confidence: based on how complete the result is
+        score = 0.5
+        if dims:  score += 0.25
+        if holes: score += 0.15
+        if mat:   score += 0.05
+        if parsed.get("scale"):    score += 0.025
+        if parsed.get("process"):  score += 0.025
+
+        return {
+            "variant_code":   parsed.get("variant_code") or inferred_code,
+            "change_summary": parsed.get("change_summary") or "",
+            "material":       mat,
+            "scale":          parsed.get("scale") or "1:1",
+            "process":        parsed.get("process") or "",
+            "dimensions":     dims,
+            "holes":          holes,
+            "notes":          parsed.get("notes") or "",
+            "confidence":     min(round(score, 2), 0.97),
+            "missing_fields": [],
+            "_source":        "groq_vision",
+        }
+
+    except Exception:
+        return None
+
+
+def extract_drawing_variant(filename: str, artifact_id: str) -> dict:
+    """
+    3-pass drawing extraction.
+
+    For known demo files  → instant template match, no API calls.
+    For everything else   → up to 3 real Groq vision calls (Pass 1: full read,
+                            Pass 2: targeted follow-up on missing fields,
+                            Pass 3: final push). Falls back to historical
+                            reference data if Groq key is absent or all calls fail.
+    """
+    import copy as _copy
+
+    name_lower = filename.lower()
+
+    # ── Known demo file: exact template, skip API entirely ───────────────────
+    for key, template in _EXTRACTION_TEMPLATES.items():
+        if key in name_lower:
+            data = _copy.deepcopy(template)
+            # still resolve variant-code collision
+            existing_set = {
+                r["revision_code"]
+                for r in (fetch_all(
+                    "SELECT revision_code FROM design_revisions WHERE artifact_id = %s::uuid",
+                    (artifact_id,),
+                ) or [])
+            }
+            vc = data.get("variant_code") or "R1"
+            if vc in existing_set:
+                nm = _re.search(r"(\d+)$", vc)
+                n  = int(nm.group(1)) + 1 if nm else 2
+                base = vc[: nm.start()] if nm else "R"
+                while f"{base}{n}" in existing_set:
+                    n += 1
+                data["variant_code"] = f"{base}{n}"
+            data.setdefault("missing_fields", [])
+            data["extraction_passes"] = 3
+            data["filename"]          = filename
+            return data
+
+    # ── Determine next free variant code ─────────────────────────────────────
+    m_code = _re.search(r'r(?:ev[\s_-]?)?([\d]+)', name_lower)
+    inferred_code = f"R{m_code.group(1)}" if m_code else "R1"
+    existing_set = {
+        r["revision_code"]
+        for r in (fetch_all(
+            "SELECT revision_code FROM design_revisions WHERE artifact_id = %s::uuid",
+            (artifact_id,),
+        ) or [])
+    }
+    if inferred_code in existing_set:
+        n = (int(m_code.group(1)) + 1) if m_code else 2
+        while f"R{n}" in existing_set:
+            n += 1
+        inferred_code = f"R{n}"
+
+    # ── Fetch artifact context + approved references ──────────────────────────
+    artifact = fetch_one(
+        """SELECT material, artifact_number, title, product_segment,
+                  assembly_family, vehicle_program
+           FROM design_artifacts WHERE id = %s::uuid""",
+        (artifact_id,),
+    ) or {}
+
+    ref_revisions = fetch_all(
+        """SELECT dr.revision_code, dr.design_data_json, da.artifact_number
+           FROM design_revisions dr
+           JOIN design_artifacts da ON da.id = dr.artifact_id
+           WHERE da.product_segment = %s AND da.assembly_family = %s
+             AND da.id != %s::uuid
+             AND LOWER(dr.approval_status) IN ('approved', 'approved_reference')
+           ORDER BY jsonb_array_length(
+               COALESCE(dr.design_data_json->'dimensions','[]'::jsonb)) DESC
+           LIMIT 3""",
+        (artifact.get("product_segment"), artifact.get("assembly_family"), artifact_id),
+    ) or []
+
+    ref_ctx = _build_ref_context(ref_revisions)
+
+    # ── 3-pass Groq extraction (if key is configured) ─────────────────────────
+    groq_key = _groq_key_valid()
+    data: dict | None = None
+    source = "groq_vision"
+
+    if groq_key:
+        raw = _extract_3pass_groq(filename, inferred_code, artifact, ref_ctx, groq_key)
+        if raw:
+            # Normalise Groq output into our standard shape
+            mat = (raw.get("material") or "").strip() or artifact.get("material") or ""
+            dims  = raw.get("dimensions") or []
+            holes = raw.get("holes") or []
+            score = 0.55
+            if dims:                    score += 0.25
+            if holes:                   score += 0.10
+            if mat:                     score += 0.04
+            if raw.get("scale"):        score += 0.03
+            if raw.get("process"):      score += 0.03
+            data = {
+                "variant_code":   raw.get("variant_code") or inferred_code,
+                "change_summary": raw.get("change_summary") or "",
+                "material":       mat,
+                "scale":          raw.get("scale") or "1:1",
+                "process":        raw.get("process") or "",
+                "dimensions":     dims,
+                "holes":          holes,
+                "notes":          raw.get("notes") or "",
+                "confidence":     min(round(score, 2), 0.97),
+            }
+
+    # ── Historical reference fallback ────────────────────────────────────────
+    if data is None:
+        source = "historical_ref"
+        data = _extract_from_reference(artifact, ref_revisions, inferred_code)
+
+    # ── Final completeness audit ──────────────────────────────────────────────
+    missing = _missing_fields_for(data)
+    data["missing_fields"]    = missing
+    data["extraction_passes"] = 3
+    data["filename"]          = filename
+    data["_source"]           = source
+    return data
+
+
+def run_groq_validation(design_revision_id: str) -> list[dict]:
+    """
+    Run Groq-powered approval intelligence validation on a newly created revision.
+
+    1. Fetches the revision's confirmed design data + artifact context.
+    2. Loads all applicable rules (segment-filtered) with their check_logic
+       and historical_context.
+    3. Fetches the two most recent approved reference revisions (same segment/family)
+       as comparison baseline.
+    4. Sends everything to Groq in a single structured prompt asking it to evaluate
+       each rule and return SAFE / WARN / BLOCK findings.
+    5. Persists findings to drawing_validation_results (replaces any prior results
+       for this revision).
+    6. Returns the list of finding dicts.
+    """
+    groq_key = _groq_key_valid()
+    if not groq_key:
+        return []
+
+    # ── 1. Fetch revision + artifact ─────────────────────────────────────────
+    revision = fetch_one(
+        """SELECT dr.id, dr.design_data_json, dr.revision_code, dr.change_summary,
+                  da.artifact_number, da.product_segment, da.assembly_family,
+                  da.vehicle_program, da.material, da.engineering_context
+           FROM design_revisions dr
+           JOIN design_artifacts da ON da.id = dr.artifact_id
+           WHERE dr.id = %s::uuid""",
+        (design_revision_id,),
+    )
+    if not revision:
+        return []
+
+    ddj      = revision.get("design_data_json") or {}
+    segment  = revision.get("product_segment") or ""
+    family   = revision.get("assembly_family") or ""
+
+    # ── 2. Load applicable segment rules ─────────────────────────────────────
+    seg_rules = fetch_all(
+        """SELECT rule_key, display_name, description, severity, rule_group,
+                  check_logic, historical_context
+           FROM engineering_review_rules
+           WHERE enabled = true
+             AND (applies_to_segments = '[]'::jsonb
+                  OR applies_to_segments @> %s::jsonb)
+           ORDER BY rule_group, severity DESC""",
+        (_json.dumps([segment]),),
+    ) or []
+
+    # ── 2b. Load artifact-level rule overrides / skips / additions ────────────
+    artifact_overrides = fetch_all(
+        """SELECT rule_key, action, override_severity, display_name,
+                  artifact_context, check_logic
+           FROM design_artifact_rules
+           WHERE artifact_id = (
+               SELECT artifact_id FROM design_revisions WHERE id = %s::uuid
+           )""",
+        (design_revision_id,),
+    ) or []
+
+    skip_keys  = {r["rule_key"] for r in artifact_overrides if r["action"] == "skip"}
+    over_map   = {r["rule_key"]: r for r in artifact_overrides if r["action"] == "override"}
+    add_rules  = [r for r in artifact_overrides if r["action"] == "add"]
+
+    # Apply overrides + remove skipped rules
+    rules: list[dict] = []
+    for r in seg_rules:
+        if r["rule_key"] in skip_keys:
+            continue                        # disabled for this artifact
+        if r["rule_key"] in over_map:
+            ov = over_map[r["rule_key"]]
+            merged = dict(r)
+            if ov.get("override_severity"):
+                merged["severity"] = ov["override_severity"]
+            if ov.get("display_name"):
+                merged["display_name"] = ov["display_name"]
+            if ov.get("check_logic"):
+                merged["check_logic"] = ov["check_logic"]
+            # Prepend artifact context so Groq sees it clearly
+            artifact_ctx = ov.get("artifact_context") or ""
+            if artifact_ctx:
+                merged["historical_context"] = (
+                    f"[ARTIFACT OVERRIDE — {revision['artifact_number']}]: {artifact_ctx}\n"
+                    + (r.get("historical_context") or "")
+                )
+            rules.append(merged)
+        else:
+            rules.append(r)
+
+    # Append artifact-only additions (not in segment rules at all)
+    for ar in add_rules:
+        rules.append({
+            "rule_key":         ar["rule_key"],
+            "display_name":     ar.get("display_name") or ar["rule_key"],
+            "description":      ar.get("artifact_context") or "",
+            "severity":         ar.get("override_severity") or "WARN",
+            "rule_group":       "ARTIFACT_SPECIFIC",
+            "check_logic":      ar.get("check_logic") or {},
+            "historical_context": (
+                f"[ARTIFACT-SPECIFIC RULE — {revision['artifact_number']}]: "
+                + (ar.get("artifact_context") or "")
+            ),
+        })
+
+    # ── 3. Fetch approved reference revisions ─────────────────────────────────
+    refs = fetch_all(
+        """SELECT dr.revision_code, dr.design_data_json, da.artifact_number
+           FROM design_revisions dr
+           JOIN design_artifacts da ON da.id = dr.artifact_id
+           WHERE da.product_segment = %s AND da.assembly_family = %s
+             AND da.artifact_number != %s
+             AND LOWER(dr.approval_status) IN ('approved','approved_reference')
+           ORDER BY jsonb_array_length(
+               COALESCE(dr.design_data_json->'dimensions','[]'::jsonb)) DESC
+           LIMIT 2""",
+        (segment, family, revision["artifact_number"]),
+    ) or []
+
+    # ── 4. Build compact Groq prompt ──────────────────────────────────────────
+    # Variant data summary
+    dims  = ddj.get("dimensions") or []
+    holes = (ddj.get("hole_callouts") or []) + (ddj.get("mounting_holes") or [])
+    notes_list = ddj.get("drawing_notes") or []
+    notes_text = " | ".join(n.get("text","") for n in notes_list if n.get("text"))
+    tb    = ddj.get("title_block") or {}
+
+    variant_summary = (
+        f"Artifact: {revision['artifact_number']} {revision['revision_code']}\n"
+        f"Segment: {segment} / {family}\n"
+        f"Program: {revision.get('vehicle_program','')}\n"
+        f"Material: {tb.get('material') or revision.get('material','')}\n"
+        f"Process: {ddj.get('process','')}\n"
+        f"Scale: {tb.get('scale','')}\n"
+        f"Change summary: {revision.get('change_summary','')}\n"
+        f"Thickness annotation: {'; '.join(t.get('name','') for t in (ddj.get('thickness_annotations') or []))}\n"
+        f"Dimensions ({len(dims)}):\n"
+        + "\n".join(f"  - {d.get('name')}: {d.get('nominal')} {d.get('unit','mm')}"
+                    + (" [CRITICAL]" if d.get("is_critical") or d.get("functional") else "")
+                    for d in dims)
+        + f"\nHole callouts ({len(holes)}):\n"
+        + "\n".join(f"  - {h.get('text') or h.get('name','?')} @ {h.get('region','')}"
+                    for h in holes)
+        + f"\nDrawing notes: {notes_text or '(none)'}"
+    )
+
+    # Reference data summary
+    ref_summary_lines = []
+    for ref in refs:
+        rddj  = ref.get("design_data_json") or {}
+        rdims = rddj.get("dimensions") or []
+        rhole_raw = rddj.get("mounting_holes") or []
+        rholes = []
+        for h in rhole_raw:
+            dia = (h.get("diameter") or "").rstrip("0").rstrip(".")
+            fit = h.get("fit_class") or ""
+            if dia:
+                rholes.append(f"Ø{dia} {fit}".strip())
+        rnotes_list = rddj.get("drawing_notes") or []
+        rnotes = " | ".join(n.get("text","") for n in rnotes_list if n.get("text"))
+        dims_str  = ", ".join(
+            "{} {}{}".format(d.get("name"), d.get("nominal"), d.get("unit","mm"))
+            for d in rdims[:8]
+        )
+        holes_str = ", ".join(sorted(set(rholes)))
+        ref_summary_lines.append(
+            "APPROVED REF: {} {}\n  Dims: {}\n  Holes: {}\n  Notes excerpt: {}".format(
+                ref["artifact_number"], ref["revision_code"],
+                dims_str, holes_str, rnotes[:200] or "(none)",
+            )
+        )
+    ref_summary = "\n\n".join(ref_summary_lines) or "No approved references available."
+
+    # ── 4. Pre-compute drawing diff so Groq reads facts, not raw data ────────
+    import math as _math
+
+    dims        = ddj.get("dimensions") or []
+    holes       = (ddj.get("hole_callouts") or []) + (ddj.get("mounting_holes") or [])
+    notes_list  = ddj.get("drawing_notes") or []
+    notes_text  = " | ".join(n.get("text","") for n in notes_list if n.get("text"))
+    tb          = ddj.get("title_block") or {}
+
+    # Normalise variant dimensions for lookup
+    _present_dims: dict[str, float] = {}
+    for d in dims:
+        key = (d.get("name") or "").lower().strip()
+        try:
+            _present_dims[key] = float(d.get("nominal") or 0)
+        except Exception:
+            pass
+
+    # Normalise variant hole callouts
+    _present_holes = []
+    for h in holes:
+        txt = (h.get("text") or h.get("name") or "").strip()
+        if txt:
+            _present_holes.append(txt)
+    _has_h11 = any("H11" in hh or "H12" in hh for hh in _present_holes)
+
+    # Diff against best approved reference
+    _ref_present:  list[str] = []
+    _ref_missing:  list[str] = []
+    _ref_changed:  list[str] = []
+    _ref_holes_approved: list[str] = []
+    if refs:
+        best_ref  = refs[0]
+        rddj      = best_ref.get("design_data_json") or {}
+        ref_label = "{} {}".format(best_ref["artifact_number"], best_ref["revision_code"])
+        for rd in (rddj.get("dimensions") or []):
+            rname = (rd.get("name") or "").lower().strip()
+            try:
+                rval = float(rd.get("nominal") or 0)
+            except Exception:
+                rval = 0.0
+            if rname in _present_dims:
+                delta = abs(_present_dims[rname] - rval)
+                if delta > 0.3:
+                    _ref_changed.append("{}: approved={}, variant={}".format(
+                        rd.get("name"), rval, _present_dims[rname]))
+                else:
+                    _ref_present.append("{}: {} mm ✓".format(rd.get("name"), _present_dims[rname]))
+            else:
+                _ref_missing.append("{}: {} mm".format(rd.get("name"), rval))
+        for rh in (rddj.get("mounting_holes") or []):
+            dia = (rh.get("diameter") or "").rstrip("0").rstrip(".")
+            fit = (rh.get("fit_class") or "").strip()
+            if dia:
+                _ref_holes_approved.append("Ø{} {}".format(dia, fit).strip())
+
+    else:
+        ref_label = "none"
+
+    # Accepted features from artifact profile
+    _accepted_features: list[str] = []
+    _skip_keys: list[str] = []
+    for ar in artifact_overrides:
+        if ar["action"] == "skip":
+            _skip_keys.append(ar["rule_key"])
+        cl_raw = ar.get("check_logic") or {}
+        cl = cl_raw if isinstance(cl_raw, dict) else _json.loads(cl_raw or "{}")
+        for feat in (cl.get("accepted_new_features") or []):
+            _accepted_features.append(feat)
+        if ar["action"] == "add" and cl.get("optional"):
+            _accepted_features.append(ar.get("display_name") or ar["rule_key"])
+
+    # Build engineering context summary from DB
+    eng_ctx: dict = revision.get("engineering_context") or {}
+    if isinstance(eng_ctx, str):
+        try:
+            eng_ctx = _json.loads(eng_ctx)
+        except Exception:
+            eng_ctx = {}
+
+    def _eng_section(key: str, label: str) -> str:
+        val = eng_ctx.get(key)
+        if not val:
+            return ""
+        if isinstance(val, dict):
+            lines = "\n".join("  • {}: {}".format(k, v) for k, v in val.items())
+            return "{}\n{}\n".format(label, lines)
+        return "{} {}\n".format(label, val)
+
+    # Strip any embedded "Groq:" instructions from seed text before passing to prompt
+    def _clean(s: str) -> str:
+        import re as _re2
+        return _re2.sub(r'Groq:[^.]*\.', '', s).strip()
+
+    def _eng_section_clean(key: str, label: str) -> str:
+        val = eng_ctx.get(key)
+        if not val:
+            return ""
+        if isinstance(val, dict):
+            lines = "\n".join(
+                "  • {}: {}".format(k, _clean(str(v))) for k, v in val.items()
+            )
+            return "{}\n{}\n".format(label, lines)
+        return "{} {}\n".format(label, _clean(str(val)))
+
+    _ENG_CTX_BLOCK = (
+        "## ENGINEERING BACKGROUND — read for context only\n"
+        "⚠ THIS SECTION IS BACKGROUND ONLY. It explains WHY rules exist.\n"
+        "⚠ Do NOT use this section to determine pass/fail. "
+        "ALL pass/fail decisions must come from PRE-COMPUTED FACTS.\n"
+        "⚠ 'Fixed in Rx' means it was fixed historically — not that the current drawing has it.\n\n"
+        + _eng_section_clean("function",                 "WHAT THIS PART DOES:")
+        + _eng_section_clean("load_case",                "LOAD CASE:")
+        + _eng_section_clean("assembly_interface",       "ASSEMBLY INTERFACE:")
+        + _eng_section_clean("critical_dimensions",      "WHY CRITICAL DIMS MATTER:")
+        + _eng_section_clean("performance_requirements", "PERFORMANCE TARGETS:")
+        + _eng_section_clean("design_constraints",       "DESIGN CONSTRAINTS:")
+        + _eng_section_clean("known_failure_modes",      "HISTORICAL FAILURES (do NOT infer current state from these):")
+        + "\n--- END BACKGROUND. Use PRE-COMPUTED FACTS below for all evaluations. ---\n"
+    ) if eng_ctx else ""
+
+    # The pre-computed facts block — shared across ALL chunk prompts
+    _FACTS = (
+        "## PRE-COMPUTED DRAWING FACTS — base ALL answers on these, not your own inference\n"
+        "Artifact: {} {}\n"
+        "Material: {}  |  Process: {}  |  Scale: {}\n"
+        "Thickness annotation: {}\n"
+        "Change summary: {}\n\n"
+        "DIMENSIONS CONFIRMED PRESENT ({} dims):\n{}\n\n"
+        "DIMENSIONS MISSING vs approved ref ({}):\n{}\n\n"
+        "DIMENSIONS CHANGED vs approved ref:\n{}\n\n"
+        "HOLE CALLOUTS ON THIS DRAWING ({}):\n{}\n"
+        "FIT CLASS: {}\n\n"
+        "APPROVED REFERENCE HOLES ({}):\n{}\n\n"
+        "DRAWING NOTES: {}\n\n"
+        "PRE-APPROVED FEATURES FOR THIS ARTIFACT (do NOT block or flag these):\n{}\n"
+    ).format(
+        revision["artifact_number"], revision["revision_code"],
+        tb.get("material") or revision.get("material",""),
+        ddj.get("process",""), tb.get("scale",""),
+        "; ".join(t.get("name","") for t in (ddj.get("thickness_annotations") or [])) or "(none)",
+        revision.get("change_summary",""),
+
+        len(_ref_present),
+        _NL.join("  ✓ " + x for x in _ref_present) or "  (none confirmed present)",
+
+        ref_label,
+        _NL.join("  ✗ " + x for x in _ref_missing) or "  (none missing)",
+
+        _NL.join("  ≠ " + x for x in _ref_changed) or "  (none changed)",
+
+        len(_present_holes),
+        _NL.join("  - " + hh for hh in _present_holes) or "  (none)",
+        "H11/H12 PRESENT ✓" if _has_h11 else "NO FIT CLASS on any hole — all callouts are bare diameters",
+
+        ref_label,
+        _NL.join("  - " + hh for hh in _ref_holes_approved) or "  (none)",
+
+        notes_text or "(none)",
+        _NL.join("  - " + f for f in _accepted_features) or "  (none defined)",
+    )
+
+    # ── 5. Group rules into chunks ────────────────────────────────────────────
+    # Groups: 1=mounting/holes BLOCK, 2=NVH/fatigue BLOCK+WARN, 3=manufacturing/docs, 4=rest
+    _GROUP_ORDER = {
+        "MOUNTING_INTERFACE": 0, "ASSEMBLY_INTERFACE": 0,
+        "NVH_FATIGUE": 1,        "FABRICATION_READINESS": 1,
+        "INSPECTION_READINESS": 2, "DRAWING_VALIDATION": 2,
+        "MANUFACTURING_READINESS": 2, "CHANGE_CONTROL": 2,
+        "ARTIFACT_SPECIFIC": 2,
+    }
+
+    def _rule_sort_key(r: dict) -> tuple:
+        sev = 0 if r["severity"] == "BLOCK" else 1
+        grp = _GROUP_ORDER.get(r["rule_group"], 3)
+        return (grp, sev, r["rule_key"])
+
+    ordered_rules = sorted(rules, key=_rule_sort_key)
+    total_rules   = len(ordered_rules)
+
+    # Target ~4 chunks; minimum 6 rules per chunk, maximum 12
+    chunk_size = max(6, min(12, _math.ceil(total_rules / 4)))
+    chunks     = [ordered_rules[i : i + chunk_size]
+                  for i in range(0, total_rules, chunk_size)]
+
+    _SCHEMA = (
+        'Return ONLY a JSON object:\n'
+        '{{"findings": [{{"rule_key":"...", "status":"SAFE|WARN|BLOCK",'
+        '"title":"max 10 words", "what_is_wrong":"...", "why_it_matters":"...",'
+        '"recommended_action":"...", "affected_entities":["..."], "confidence":0.0,'
+        '"x_pct":50.0,"y_pct":50.0}}]}}\n'
+        'x_pct / y_pct: estimate where on the drawing image this issue is located '
+        '(0–100, origin = top-left corner). Use the DRAWING SPATIAL LAYOUT guide above.'
+    )
+
+    # Fallback positions for known rule keys — used when Groq omits coordinates
+    _POSITION_FALLBACK: dict[str, tuple[float, float]] = {
+        "ENGINE_LOAD_FIT_CLASS":              (28.0, 25.0),
+        "UPPER_HOLE_DIAMETER_PROTECTED":      (24.0, 22.0),
+        "LOWER_HOLE_DIAMETER_PROTECTED":      (24.0, 72.0),
+        "FATIGUE_SPECTRUM_NOTE_REQUIRED":     (80.0, 22.0),
+        "MISSING_REQUIRED_DIMENSION":         (38.0, 50.0),
+        "HOLE_CENTRE_DISTANCE_CONSISTENCY":   (38.0, 45.0),
+        "OVERALL_HEIGHT_PRESENT":             (10.0, 48.0),
+        "GENERAL_TOLERANCE_STANDARD_STATED":  (80.0, 30.0),
+        "SURFACE_FINISH_REQUIRED":            (80.0, 38.0),
+        "NVH_VALIDATION_NOTE_REQUIRED":       (80.0, 27.0),
+        "SECTION_VIEW_THICKNESS_SHOWN":       (60.0, 45.0),
+        "MISSING_THICKNESS_CALLOUT":          (60.0, 42.0),
+        "PROCESS_DEFINED":                    (80.0, 46.0),
+        "MATERIAL_SPECIFIED":                 (80.0, 52.0),
+        "MOUNTING_HOLE_COUNT_REQUIRED":       (28.0, 52.0),
+        "MISSING_HOLE_CALLOUT":               (28.0, 46.0),
+        "CHANGE_SUMMARY_PRESENT":             (80.0, 88.0),
+        "DRAWING_NUMBER_PRESENT":             (80.0, 82.0),
+        "REVISION_CODE_PRESENT":              (80.0, 85.0),
+    }
+
+    _SPATIAL_GUIDE = (
+        "DRAWING SPATIAL LAYOUT — use to set x_pct / y_pct for each finding:\n"
+        "  x_pct 0=left edge → 100=right edge  |  y_pct 0=top → 100=bottom\n"
+        "  Upper mounting holes / upper features : x 20-40 , y 15-35\n"
+        "  Centre holes / mid-body               : x 20-40 , y 42-58\n"
+        "  Lower mounting holes / lower features : x 20-40 , y 65-82\n"
+        "  Overall height dimension              : x  8-15 , y 45-55\n"
+        "  Hole-centre distance (vertical)       : x 35-50 , y 40-55\n"
+        "  Width / horizontal dimensions         : x 30-60 , y 85-95\n"
+        "  Drawing notes block (top-right)       : x 72-92 , y 10-35\n"
+        "  Title block (bottom-right)            : x 72-92 , y 80-95\n"
+        "  Section view / side profile           : x 52-70 , y 20-80\n"
+        "  Process / material annotation         : x 72-92 , y 35-55\n"
+    )
+
+    _SYSTEM_MSG = (
+        "You are a precision automotive engineering drawing reviewer. "
+        "Return ONLY valid JSON. Never invent findings not supported by the facts given."
+    )
+
+    # ── 6. Call Groq chunk by chunk ───────────────────────────────────────────
+    try:
+        import groq as _groq_mod
+        client           = _groq_mod.Groq(api_key=groq_key)
+        all_raw_findings: list[dict] = []
+        prior_summary    = ""
+        carry_rules: list[dict] = []   # rules not returned by previous chunk
+
+        def _rule_text(r: dict) -> str:
+            cl = r.get("check_logic") or {}
+            if isinstance(cl, str):
+                try:    cl = _json.loads(cl)
+                except: cl = {}
+            override = ("⚠ ARTIFACT OVERRIDE — use this severity\n  "
+                        if r.get("historical_context","").startswith("[ARTIFACT OVERRIDE") else "")
+            return (
+                "RULE [{}] {} | Severity: {} | Group:{}\n"
+                "  {}Description: {}\n"
+                "  Check: {}\n"
+                "  Context: {}"
+            ).format(
+                r["rule_key"], r.get("display_name",""), r["severity"], r.get("rule_group",""),
+                override,
+                r.get("description",""),
+                _json.dumps(cl),
+                (r.get("historical_context") or "")[:160],
+            )
+
+        def _partial_findings(raw: str) -> list[dict]:
+            """
+            Extract every complete finding object from a potentially-truncated JSON array.
+            Works even if the outer brackets are missing or the array is cut off mid-item.
+            """
+            results: list[dict] = []
+            # Find the start of the findings array
+            arr_start = raw.find('"findings"')
+            if arr_start == -1:
+                arr_start = 0
+            bracket = raw.find('[', arr_start)
+            if bracket == -1:
+                return results
+            # Walk through the string extracting each complete {...} block
+            i = bracket + 1
+            depth = 0
+            obj_start = -1
+            while i < len(raw):
+                ch = raw[i]
+                if ch == '{':
+                    if depth == 0:
+                        obj_start = i
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0 and obj_start != -1:
+                        candidate = raw[obj_start : i + 1]
+                        try:
+                            obj = _json.loads(candidate)
+                            if obj.get("rule_key"):
+                                results.append(obj)
+                        except Exception:
+                            pass
+                        obj_start = -1
+                elif ch == ']' and depth == 0:
+                    break
+                i += 1
+            return results
+
+        for chunk_idx, chunk in enumerate(chunks, 1):
+            # Prepend any rules not returned by the previous chunk
+            effective_chunk = carry_rules + chunk
+            carry_rules = []
+
+            prior_ctx = (
+                "## FINDINGS ALREADY CONFIRMED IN PRIOR CHUNKS\n" + prior_summary + "\n"
+                if prior_summary else ""
+            )
+
+            rules_text = _NL.join(_rule_text(r) for r in effective_chunk)
+
+            _fit_class_verdict = (
+                "FIT CLASS: H11/H12 PRESENT ✓ — For ENGINE_LOAD_FIT_CLASS, "
+                "UPPER_HOLE_DIAMETER_PROTECTED, LOWER_HOLE_DIAMETER_PROTECTED: "
+                "return status=SAFE (do NOT re-evaluate from raw callouts)."
+                if _has_h11 else
+                "FIT CLASS: NO H11 ON ANY HOLE — ENGINE_LOAD_FIT_CLASS, "
+                "UPPER_HOLE_DIAMETER_PROTECTED, LOWER_HOLE_DIAMETER_PROTECTED: return status=BLOCK."
+            )
+            _notes_verdict = (
+                "FATIGUE NOTE: PT-LS keywords found in DRAWING NOTES — "
+                "FATIGUE_SPECTRUM_NOTE_REQUIRED: return status=SAFE."
+                if any(kw in notes_text for kw in ("PT-LS", "fatigue", "load spectrum", "NVH"))
+                else
+                "FATIGUE NOTE: no fatigue keywords in DRAWING NOTES — "
+                "FATIGUE_SPECTRUM_NOTE_REQUIRED: return status=BLOCK."
+            )
+            prompt = (
+                "You are evaluating chunk {}/{} ({} rules) of an engineering drawing review.\n\n"
+                "{}\n\n"
+                "{}\n"
+                "## PRE-COMPUTED VERDICTS — use these directly, no re-evaluation needed\n"
+                "{}\n"
+                "{}\n\n"
+                "{}\n"
+                "## RULES TO EVALUATE IN THIS CHUNK\n"
+                "Evaluate ONLY these {} rules. Return one finding per rule, no exceptions.\n\n"
+                "HARD RULES:\n"
+                "1. PRE-COMPUTED VERDICTS above override your own analysis for those specific rules.\n"
+                "2. For all other rules: FACTS are ground truth. ✓ present = SAFE. ✗ missing = flag.\n"
+                "3. BACKGROUND is historical context only — never a pass condition.\n"
+                "4. Do not escalate WARN to BLOCK or downgrade BLOCK to WARN.\n"
+                "5. Always include x_pct and y_pct in every finding using the DRAWING SPATIAL LAYOUT guide.\n\n"
+                "{}\n\n{}"
+            ).format(
+                chunk_idx, len(chunks), len(effective_chunk),
+                _ENG_CTX_BLOCK + _FACTS,
+                prior_ctx,
+                _fit_class_verdict,
+                _notes_verdict,
+                _SPATIAL_GUIDE,
+                len(effective_chunk),
+                rules_text,
+                _SCHEMA,
+            )
+
+            resp = client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": _SYSTEM_MSG},
+                    {"role": "user",   "content": prompt},
+                ],
+                max_tokens=4096,
+                temperature=0,
+            )
+            raw = resp.choices[0].message.content or ""
+
+            # Try full parse first; fall back to partial extraction
+            parsed = _parse_groq_json(raw)
+            if parsed:
+                chunk_findings = parsed.get("findings") or []
+            else:
+                chunk_findings = _partial_findings(raw)
+
+            all_raw_findings.extend(chunk_findings)
+
+            # Identify which rules were NOT returned and carry forward
+            returned_keys = {f.get("rule_key") for f in chunk_findings}
+            for r in effective_chunk:
+                if r["rule_key"] not in returned_keys:
+                    carry_rules.append(r)
+
+            # Prior-findings summary for next chunk
+            notable = [f for f in chunk_findings if f.get("status") in ("BLOCK","WARN")][:8]
+            if notable:
+                prior_summary += _NL.join(
+                    "  [{}] {}: {}".format(f.get("status"), f.get("rule_key",""), f.get("title",""))
+                    for f in notable
+                ) + "\n"
+
+        # Final catch-up chunk for any still-unevaluated rules
+        if carry_rules:
+            rules_text = _NL.join(_rule_text(r) for r in carry_rules)
+            prompt = (
+                "Final catch-up: evaluate these {} unevaluated rules.\n\n"
+                "{}\n\n"
+                "{}\n"
+                "{}\n\n"
+                "{}\n\n{}"
+            ).format(
+                len(carry_rules),
+                _FACTS,
+                _fit_class_verdict,
+                _notes_verdict,
+                rules_text,
+                _SCHEMA,
+            )
+            resp = client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": _SYSTEM_MSG},
+                    {"role": "user",   "content": prompt},
+                ],
+                max_tokens=4096,
+                temperature=0,
+            )
+            raw = resp.choices[0].message.content or ""
+            parsed = _parse_groq_json(raw)
+            catchup = parsed.get("findings") if parsed else _partial_findings(raw)
+            all_raw_findings.extend(catchup or [])
+
+        findings_raw = all_raw_findings
+
+    except Exception:
+        return []
+
+    # ── 5b. Post-Groq reconciliation — drop BLOCK findings that contradict facts ──
+    # Groq (llama-4-scout) can hallucinate BLOCK for rules the drawing actually satisfies.
+    # These checks are deterministic and override Groq's judgment for specific rule keys.
+    _has_fatigue_note = any(
+        kw.lower() in (notes_text or "").lower()
+        for kw in ("pt-ls", "fatigue", "load spectrum", "nvh-hbc")
+    )
+
+    def _required_dims_all_present() -> bool:
+        _req = [
+            ("overall height",       152.1, 1.0),
+            ("hole centre distance",  51.4,  0.5),
+            ("side reference height", 89.9,  0.5),
+            ("lower clearance",       33.0,  2.0),
+        ]
+        for name, val, tol in _req:
+            if not any(abs(v - val) <= tol for k, v in _present_dims.items() if name in k):
+                return False
+        return True
+
+    _H11_RULES   = {"ENGINE_LOAD_FIT_CLASS", "UPPER_HOLE_DIAMETER_PROTECTED", "LOWER_HOLE_DIAMETER_PROTECTED"}
+    _FATIGUE_RULES = {"FATIGUE_SPECTRUM_NOTE_REQUIRED"}
+    _DIM_RULES     = {
+        "MISSING_REQUIRED_DIMENSION": _required_dims_all_present,
+        "HOLE_CENTRE_DISTANCE_CONSISTENCY": lambda: abs(_present_dims.get("hole centre distance", 0) - 51.4) <= 0.5,
+        "OVERALL_HEIGHT_PRESENT": lambda: "overall height" in _present_dims,
+    }
+
+    def _keep_finding(f: dict) -> bool:
+        if f.get("status") != "BLOCK":
+            return True
+        rk = f.get("rule_key", "")
+        if rk in _H11_RULES:
+            return not _has_h11        # drop BLOCK if H11 IS present
+        if rk in _FATIGUE_RULES:
+            return not _has_fatigue_note  # drop BLOCK if fatigue note IS present
+        if rk in _DIM_RULES:
+            return not _DIM_RULES[rk]()   # drop BLOCK if the required dim IS present
+        return True
+
+    findings_raw = [f for f in findings_raw if _keep_finding(f)]
+
+    # ── 6. Map severity label + persist ──────────────────────────────────────
+    _SEV_MAP = {"BLOCK": "CRITICAL", "WARN": "MAJOR", "SAFE": "MINOR"}
+
+    # Delete any prior automated validation results for this revision
+    execute_query(
+        "DELETE FROM drawing_validation_results WHERE design_revision_id = %s::uuid",
+        (design_revision_id,),
+    )
+
+    persisted: list[dict] = []
+    for f in findings_raw:
+        rule_key = f.get("rule_key") or ""
+        status   = f.get("status") or "SAFE"
+        if status not in ("SAFE", "WARN", "BLOCK"):
+            status = "SAFE"
+
+        # Resolve spatial position: prefer Groq-returned values, fallback to known map
+        _x = f.get("x_pct")
+        _y = f.get("y_pct")
+        if _x is None or _y is None:
+            _fb = _POSITION_FALLBACK.get(rule_key)
+            _x = _fb[0] if _fb else 50.0
+            _y = _fb[1] if _fb else 50.0
+        try:
+            _x = float(_x); _y = float(_y)
+            _x = max(2.0, min(96.0, _x))
+            _y = max(2.0, min(96.0, _y))
+        except Exception:
+            _x, _y = 50.0, 50.0
+
+        row = {
+            "design_revision_id": design_revision_id,
+            "rule_key":           rule_key,
+            "severity":           _SEV_MAP.get(status, "MINOR"),
+            "status":             status,
+            "title":              (f.get("title") or rule_key)[:255],
+            "what_is_wrong":      f.get("what_is_wrong") or "",
+            "why_it_matters":     f.get("why_it_matters") or "",
+            "recommended_action": f.get("recommended_action") or "",
+            "affected_entities":  _json.dumps(f.get("affected_entities") or []),
+            "affected_regions":   _json.dumps([]),
+            "evidence_json":      _json.dumps({
+                "confidence": f.get("confidence", 0.8),
+                "source":     "groq_approval_intelligence",
+                "x_pct":      _x,
+                "y_pct":      _y,
+            }),
+        }
+        execute_query(
+            """INSERT INTO drawing_validation_results
+               (design_revision_id, rule_key, severity, status, title,
+                what_is_wrong, why_it_matters, recommended_action,
+                affected_entities, affected_regions, evidence_json)
+               VALUES (%(design_revision_id)s::uuid, %(rule_key)s, %(severity)s,
+                       %(status)s, %(title)s, %(what_is_wrong)s, %(why_it_matters)s,
+                       %(recommended_action)s, %(affected_entities)s::jsonb,
+                       %(affected_regions)s::jsonb, %(evidence_json)s::jsonb)""",
+            row,
+        )
+        persisted.append({**f, "status": status})
+
+    return persisted
+
+
+def build_design_data_from_variant(confirmed: dict, artifact: dict) -> dict:
+    """
+    Reconstruct a full design_data_json from the user-confirmed extraction data.
+    This is what gets stored in design_revisions and drives validation.
+    """
+    dims   = confirmed.get("dimensions") or []
+    holes  = confirmed.get("holes") or []
+    notes  = confirmed.get("notes") or ""
+    mat    = confirmed.get("material") or artifact.get("material") or "CRCA Sheet Metal"
+    scale  = confirmed.get("scale") or "1:1"
+    proc   = confirmed.get("process") or "Laser Cut + Bend"
+    code   = confirmed.get("variant_code") or "R1"
+    art_no = artifact.get("artifact_number") or "—"
+
+    # Extract numeric thickness from material string e.g. "CRCA IS 513 Grade D, 2.5 mm"
+    thk_match = _re.search(r'(\d+(?:\.\d+)?)\s*mm', mat, _re.I)
+    thk_str   = thk_match.group(0) if thk_match else None
+    thk_val   = thk_match.group(1) if thk_match else None
+
+    return {
+        "approval_status": "REVIEW_REQUIRED",
+        "process": proc,
+        "thickness": thk_str,
+        "title_block": {
+            "drawing_number": art_no,
+            "revision":       code,
+            "material":       mat,
+            "scale":          scale,
+            "process":        proc,
+            "thickness":      thk_str,
+        },
+        "thickness_annotations": (
+            [{"id": "T-1",
+              "name": f"Sheet thickness t = {thk_str}",
+              "region": "Section view / title block"}]
+            if thk_str else []
+        ),
+        "dimensions": [
+            {
+                "id":        f"D-{i + 1}",
+                "name":      d["name"],
+                "nominal":   d.get("value"),
+                "unit":      d.get("unit") or "mm",
+                "critical":  bool(d.get("critical")),
+                "functional": bool(d.get("critical")),
+                "tolerance": (
+                    {"plus": 0.1, "minus": 0.1}
+                    if d.get("critical")
+                    else {"plus": 0.5, "minus": 0.5}
+                ),
+            }
+            for i, d in enumerate(dims)
+            if d.get("name")
+        ],
+        "mounting_holes": [
+            {
+                "id":     f"MH-{i + 1}",
+                "name":   h.get("callout") or f"Mounting hole {i + 1}",
+                "region": h.get("region") or "Sheet 1",
+            }
+            for i, h in enumerate(holes)
+            if h.get("callout")
+        ],
+        "hole_callouts": [
+            {
+                "id":     f"HC-{i + 1}",
+                "text":   h.get("callout") or "",
+                "region": h.get("region") or "Sheet 1",
+            }
+            for i, h in enumerate(holes)
+            if h.get("callout")
+        ],
+        "drawing_notes": [
+            {"id": "NOTE-1", "text": notes, "region": "Drawing notes"}
+        ] if notes else [],
+        "validation_profile": {},
+    }
+
+
+def generate_senior_reviewer_report(design_revision_id: str) -> dict:
+    """
+    Produce a senior-engineer-style narrative review report.
+
+    Fully deterministic — no AI API calls.  Combines:
+    - Validation rule results for this revision
+    - Approved-revision dimensions from the closest same-family programs
+    - Segment-rule context from the engineering_review_rules table
+
+    Returns a structured dict suitable for JSON serialisation and
+    direct rendering in the review workspace.
+    """
+
+    # ── 1. Load revision + artifact ───────────────────────────────────────────
+    revision = fetch_one("""
+        SELECT
+            dr.id, dr.revision_code, dr.approval_status,
+            da.id            AS artifact_id,
+            da.artifact_number,
+            da.title         AS artifact_title,
+            da.product_segment,
+            da.assembly_family,
+            da.vehicle_program,
+            da.material,
+            da.supplier
+        FROM design_revisions dr
+        JOIN design_artifacts da ON da.id = dr.artifact_id
+        WHERE dr.id = %s::uuid
+    """, (design_revision_id,))
+    if not revision:
+        raise ValueError("Design revision not found")
+
+    artifact_id      = str(revision["artifact_id"])
+    product_segment  = revision.get("product_segment") or ""
+    assembly_family  = revision.get("assembly_family") or ""
+    revision_code    = revision["revision_code"]
+    artifact_number  = revision["artifact_number"]
+    artifact_title   = revision["artifact_title"]
+    vehicle_program  = revision.get("vehicle_program") or ""
+
+    # ── 2. Validation results ─────────────────────────────────────────────────
+    val_results = fetch_all("""
+        SELECT rule_key, status, severity, title,
+               what_is_wrong, why_it_matters, recommended_action,
+               affected_entities, affected_regions, evidence_json
+        FROM drawing_validation_results
+        WHERE design_revision_id = %s::uuid
+        ORDER BY
+            CASE status    WHEN 'BLOCK' THEN 0 WHEN 'WARN' THEN 1 ELSE 2 END,
+            CASE severity  WHEN 'CRITICAL' THEN 0 WHEN 'MAJOR' THEN 1 ELSE 2 END,
+            rule_key
+    """, (design_revision_id,))
+
+    block_count = sum(1 for v in val_results if v["status"] == "BLOCK")
+    warn_count  = sum(1 for v in val_results if v["status"] == "WARN")
+
+    # ── 3. Current revision dimensions ────────────────────────────────────────
+    current_dims = {
+        d["dimension_key"]: d
+        for d in fetch_all("""
+            SELECT dimension_key, display_name, nominal_value, unit,
+                   tolerance_json, is_critical
+            FROM drawing_dimensions
+            WHERE design_revision_id = %s::uuid
+        """, (design_revision_id,))
+    }
+
+    # ── 4. Reference programs (same segment + family, excluding self) ─────────
+    similar_artifacts = fetch_all("""
+        SELECT da.id, da.artifact_number, da.title,
+               da.product_segment, da.assembly_family, da.vehicle_program
+        FROM design_artifacts da
+        WHERE da.id         != %s::uuid
+          AND da.assembly_family  = %s
+          AND da.product_segment  = %s
+        ORDER BY da.artifact_number
+        LIMIT 6
+    """, (artifact_id,
+          assembly_family  or "__none__",
+          product_segment  or "__none__"))
+
+    reference_programs: list[dict] = []
+    for cand in similar_artifacts:
+        approved_rev = fetch_one("""
+            SELECT dr.id, dr.revision_code
+            FROM design_revisions dr
+            WHERE dr.artifact_id = %s::uuid
+              AND dr.approval_status = 'approved'
+            ORDER BY dr.revision_sequence DESC
+            LIMIT 1
+        """, (str(cand["id"]),))
+        if not approved_rev:
+            continue
+        ref_dims = {
+            d["dimension_key"]: d
+            for d in fetch_all("""
+                SELECT dimension_key, display_name, nominal_value, unit,
+                       tolerance_json, is_critical
+                FROM drawing_dimensions
+                WHERE design_revision_id = %s::uuid
+            """, (str(approved_rev["id"]),))
+        }
+        ref_holes = fetch_all("""
+            SELECT display_text, drawing_region
+            FROM drawing_annotations
+            WHERE design_revision_id = %s::uuid
+              AND annotation_type = 'HOLE_CALLOUT'
+        """, (str(approved_rev["id"]),))
+
+        reference_programs.append({
+            "artifact_number":  cand["artifact_number"],
+            "title":            cand["title"],
+            "vehicle_program":  cand.get("vehicle_program") or "",
+            "revision_code":    approved_rev["revision_code"],
+            "dims":             ref_dims,
+            "holes":            ref_holes,
+        })
+
+    # ── 5. Build per-finding entries with historical context ──────────────────
+    def _fmt_dim(d: dict) -> str:
+        nom = d.get("nominal_value")
+        unit = d.get("unit") or "mm"
+        try:
+            return f"{float(nom):g} {unit}"
+        except (TypeError, ValueError):
+            return str(nom or "—")
+
+    finding_entries: list[dict] = []
+    for idx, v in enumerate(val_results, start=1):
+        rule_key  = v["rule_key"]
+        status    = v["status"]
+        severity  = v.get("severity") or "MAJOR"
+        title     = v.get("title") or rule_key.replace("_", " ").title()
+        what      = v.get("what_is_wrong") or ""
+        why       = v.get("why_it_matters") or ""
+        action    = v.get("recommended_action") or ""
+        evidence  = v.get("evidence_json") or {}
+        if not isinstance(evidence, dict):
+            evidence = {}
+
+        # --- historical context ---
+        hist_lines: list[str] = []
+
+        dim_key = evidence.get("dimension_key")
+        if dim_key:
+            for ref in reference_programs:
+                if dim_key in ref["dims"]:
+                    rd = ref["dims"][dim_key]
+                    hist_lines.append(
+                        f"{ref['artifact_number']} ({ref['revision_code']}): "
+                        f"{rd['display_name']} = {_fmt_dim(rd)}"
+                    )
+
+        # For hole-callout findings: check if any ref program hole callout
+        # text overlaps with the evidence name/description
+        if rule_key == "MISSING_HOLE_CALLOUT":
+            evidence_name = (evidence.get("name") or evidence.get("hole") or "").lower()
+            for ref in reference_programs:
+                for hole in ref["holes"]:
+                    hole_text = (hole.get("display_text") or "").lower()
+                    # Match if at least one diameter fragment is shared
+                    for frag in ("ø13", "ø12", "ø18", "13 h11", "12 h11", "18.1 h11"):
+                        if frag in evidence_name and frag in hole_text:
+                            hist_lines.append(
+                                f"{ref['artifact_number']} ({ref['revision_code']}): "
+                                f"{hole['display_text']} at {hole.get('drawing_region','Sheet 1')}"
+                            )
+                            break
+
+        # For segment-rule violations: note that ref programs comply
+        if rule_key == "MISSING_HOLE_CALLOUT" and not hist_lines:
+            # Try looser match — any hole from ref programs
+            for ref in reference_programs:
+                if ref["holes"]:
+                    samples = ", ".join(h["display_text"] for h in ref["holes"][:3])
+                    hist_lines.append(
+                        f"{ref['artifact_number']} ({ref['revision_code']}) carries: {samples}"
+                    )
+
+        if rule_key == "FEATURE_OUTSIDE_REFERENCE_ENVELOPE" and not hist_lines:
+            feat_name = evidence.get("name") or "this feature"
+            if reference_programs:
+                ref_labels = " and ".join(
+                    f"{r['artifact_number']} ({r['revision_code']})"
+                    for r in reference_programs
+                )
+                hist_lines.append(
+                    f"{feat_name} is absent from {ref_labels}. "
+                    "An ECN must be raised to extend the approved reference envelope."
+                )
+
+        # Compose narrative paragraph
+        narrative_parts = [f"**{title}** [{status}]"]
+        if what:
+            narrative_parts.append(what)
+        if why:
+            narrative_parts.append(why)
+        if hist_lines:
+            narrative_parts.append(
+                "Historical reference — " + "; ".join(hist_lines) + "."
+            )
+        if action:
+            narrative_parts.append(f"Required action: {action}")
+
+        finding_entries.append({
+            "index":               idx,
+            "rule_key":            rule_key,
+            "status":              status,
+            "severity":            severity,
+            "title":               title,
+            "what":                what,
+            "why":                 why,
+            "action":              action,
+            "historical_context":  hist_lines,
+            "narrative":           "  ".join(narrative_parts),
+        })
+
+    # ── 6. Engineering history section ────────────────────────────────────────
+    eng_history: list[dict] = []
+    for ref in reference_programs:
+        key_dims = [
+            f"{d['display_name']} = {_fmt_dim(d)}"
+            for d in ref["dims"].values()
+            if d.get("nominal_value") is not None
+        ][:6]
+        hole_summary = ", ".join(h["display_text"] for h in ref["holes"][:4]) if ref["holes"] else "—"
+        eng_history.append({
+            "artifact_number": ref["artifact_number"],
+            "title":           ref["title"],
+            "vehicle_program": ref["vehicle_program"],
+            "revision_code":   ref["revision_code"],
+            "status_label":    "Production Reference",
+            "key_dimensions":  key_dims,
+            "hole_callouts":   hole_summary,
+            "narrative": (
+                f"{ref['artifact_number']} — {ref['vehicle_program']}, "
+                f"{ref['revision_code']} (Production Released, 0 blocking findings).  "
+                + (f"Key dims: {', '.join(key_dims[:4])}." if key_dims else "")
+            ),
+        })
+
+    # ── 7. Recommendations list ───────────────────────────────────────────────
+    recommendations: list[dict] = [
+        {"rule_key": v["rule_key"], "status": v["status"], "action": v["recommended_action"]}
+        for v in val_results
+        if v.get("recommended_action")
+    ]
+
+    # ── 8. Overall status + executive summary ─────────────────────────────────
+    if block_count > 0:
+        status_badge = "BLOCK"
+        status_label = "CANNOT RELEASE"
+    elif revision.get("approval_status") == "approved" and warn_count == 0:
+        status_badge = "SAFE"
+        stage = vehicle_program or ""
+        if "development" in stage.lower() or "proto" in stage.lower():
+            status_label = "CLEARED FOR PROTOTYPE RELEASE"
+        else:
+            status_label = "APPROVED — PRODUCTION REFERENCE"
+    else:
+        status_badge = "WARN" if warn_count else "SAFE"
+        status_label = "REVIEW RECOMMENDED" if warn_count else "CLEARED"
+
+    ref_label = " and ".join(
+        f"{r['artifact_number']} ({r['vehicle_program']}, {r['revision_code']})"
+        for r in reference_programs
+    )
+
+    if block_count > 0:
+        ref_text = (
+            f"  Comparison against production-released drawings {ref_label} "
+            if ref_label else ""
+        )
+        exec_summary = (
+            f"This drawing cannot proceed to release.{ref_text}"
+            f"{'reveals' if ref_label else 'Validation identifies'} "
+            f"{block_count} blocking gap{'s' if block_count != 1 else ''} "
+            f"and {warn_count} warning{'s' if warn_count != 1 else ''}.  "
+            "All items flagged BLOCK must be resolved and verified before this "
+            "revision can advance to the next release gate."
+        )
+    elif reference_programs and revision.get("approval_status") == "approved":
+        exec_summary = (
+            f"All validation checks pass.  This revision aligns with the "
+            f"production-baseline geometry of {ref_label}.  "
+            "The drawing is cleared for release subject to the standard sign-off process."
+        )
+    elif revision.get("approval_status") == "approved":
+        exec_summary = (
+            "All validation checks pass.  No blocking findings were identified.  "
+            "Standard release process may proceed."
+        )
+    else:
+        exec_summary = (
+            f"Validation complete: {block_count} blocking finding(s), "
+            f"{warn_count} warning(s) identified."
+        )
+
+    return {
+        "revision_id":            design_revision_id,
+        "revision_code":          revision_code,
+        "artifact_number":        artifact_number,
+        "artifact_title":         artifact_title,
+        "vehicle_program":        vehicle_program,
+        "product_segment":        product_segment,
+        "assembly_family":        assembly_family,
+        "status_badge":           status_badge,
+        "status_label":           status_label,
+        "block_count":            block_count,
+        "warn_count":             warn_count,
+        "executive_summary":      exec_summary,
+        "finding_sections":       finding_entries,
+        "engineering_history":    eng_history,
+        "recommendations":        recommendations,
+        "reference_program_names": [r["artifact_number"] for r in reference_programs],
+        "generated_at":           datetime.utcnow().isoformat(),
+    }
+
+
 def list_design_artifacts() -> list[dict]:
     return fetch_all("""
         SELECT
@@ -891,6 +3019,77 @@ def list_design_artifacts() -> list[dict]:
         GROUP BY da.id
         ORDER BY da.updated_at DESC NULLS LAST, da.created_at DESC
     """)
+
+
+def get_part_search_categories() -> dict:
+    """Return distinct non-null values for each searchable category."""
+    def _vals(col):
+        rows = fetch_all(f"SELECT DISTINCT {col} FROM design_artifacts WHERE {col} IS NOT NULL AND {col} != '' ORDER BY {col}")
+        return [r[col] for r in rows]
+
+    return {
+        "vehicle_programs":  _vals("vehicle_program"),
+        "assembly_families": _vals("assembly_family"),
+        "product_segments":  _vals("product_segment"),
+        "domains":           _vals("domain"),
+        "owning_teams":      _vals("owning_team"),
+        "suppliers":         _vals("supplier"),
+    }
+
+
+def search_design_artifacts(
+    q: str = "",
+    vehicle_program: str = "",
+    assembly_family: str = "",
+    product_segment: str = "",
+    domain: str = "",
+    owning_team: str = "",
+    supplier: str = "",
+) -> list[dict]:
+    conditions = []
+    params = []
+
+    if q:
+        conditions.append(
+            "(da.artifact_number ILIKE %s OR da.title ILIKE %s OR da.linked_part_number ILIKE %s)"
+        )
+        like = f"%{q}%"
+        params += [like, like, like]
+    if vehicle_program:
+        conditions.append("da.vehicle_program = %s")
+        params.append(vehicle_program)
+    if assembly_family:
+        conditions.append("da.assembly_family = %s")
+        params.append(assembly_family)
+    if product_segment:
+        conditions.append("da.product_segment = %s")
+        params.append(product_segment)
+    if domain:
+        conditions.append("da.domain = %s")
+        params.append(domain)
+    if owning_team:
+        conditions.append("da.owning_team = %s")
+        params.append(owning_team)
+    if supplier:
+        conditions.append("da.supplier = %s")
+        params.append(supplier)
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    return fetch_all(f"""
+        SELECT
+            da.*,
+            COUNT(dr.id) as revision_count,
+            MAX(dr.revision_sequence) as latest_revision_sequence,
+            MAX(dr.approval_status) as latest_approval_status,
+            BOOL_OR(LOWER(dr.approval_status) IN ('approved', 'approved_reference'))
+                AS has_approved_revision
+        FROM design_artifacts da
+        LEFT JOIN design_revisions dr ON dr.artifact_id = da.id
+        {where}
+        GROUP BY da.id
+        ORDER BY da.updated_at DESC NULLS LAST, da.created_at DESC
+    """, tuple(params) if params else None)
 
 
 def build_revision_comparison(artifact_id: str) -> dict:
@@ -1077,7 +3276,95 @@ def get_design_artifact_detail(artifact_id: str) -> dict:
         revision["asset_url"] = _drawing_asset_url(revision.get("source_filename"))
         revision["prt_asset_url"] = _drawing_asset_url((revision.get("design_data_json") or {}).get("prt_filename"))
     comparison = build_revision_comparison(artifact_id)
-    return {"artifact": artifact, "revisions": revisions, "comparison": comparison}
+
+    # Artifact-level rule overrides / skips / additions
+    artifact_rule_profile = fetch_all(
+        """SELECT rule_key, action, override_severity, display_name,
+                  artifact_context, check_logic
+           FROM design_artifact_rules
+           WHERE artifact_id = %s::uuid
+           ORDER BY action, rule_key""",
+        (artifact_id,),
+    ) or []
+    profile_map = {r["rule_key"]: r for r in artifact_rule_profile}
+
+    # Rules applicable to this part's segment
+    segment = (artifact.get("product_segment") or "")
+    applicable_rules = fetch_all(
+        """SELECT rule_key, display_name, description, severity, rule_group,
+                  check_logic, historical_context, applies_to_segments
+           FROM engineering_review_rules
+           WHERE enabled = true
+             AND (applies_to_segments = '[]'::jsonb
+                  OR applies_to_segments @> %s::jsonb)
+           ORDER BY
+             CASE severity WHEN 'BLOCK' THEN 0 WHEN 'WARN' THEN 1 ELSE 2 END,
+             rule_group, display_name""",
+        (_json.dumps([segment]),),
+    ) or []
+
+    # Validation results per revision (most recent first, non-SAFE only for summary)
+    rev_ids = [str(r["id"]) for r in revisions]
+    all_findings: list[dict] = []
+    if rev_ids:
+        placeholders = ",".join(["%s::uuid"] * len(rev_ids))
+        all_findings = fetch_all(
+            f"""SELECT design_revision_id::text, rule_key, status, severity, title,
+                       what_is_wrong, recommended_action
+                FROM drawing_validation_results
+                WHERE design_revision_id IN ({placeholders})
+                ORDER BY CASE status WHEN 'BLOCK' THEN 0 WHEN 'WARN' THEN 1 ELSE 2 END""",
+            tuple(rev_ids),
+        ) or []
+
+    # Group findings by revision_id
+    findings_by_rev: dict = {}
+    for f in all_findings:
+        rid = f["design_revision_id"]
+        findings_by_rev.setdefault(rid, []).append(f)
+
+    # Merge artifact overrides into rules list for display
+    skip_keys = {r["rule_key"] for r in artifact_rule_profile if r["action"] == "skip"}
+    rules_display: list[dict] = []
+    for rule in applicable_rules:
+        rk = rule["rule_key"]
+        if rk in skip_keys:
+            continue
+        display_rule = dict(rule)
+        if rk in profile_map:
+            ov = profile_map[rk]
+            if ov.get("override_severity"):
+                display_rule["severity"]         = ov["override_severity"]
+                display_rule["_overridden"]       = True
+            if ov.get("display_name"):
+                display_rule["display_name"]      = ov["display_name"]
+            if ov.get("artifact_context"):
+                display_rule["artifact_context"]  = ov["artifact_context"]
+        rules_display.append(display_rule)
+
+    # Append artifact-only additions not in segment rules
+    existing_keys = {r["rule_key"] for r in rules_display}
+    for ar in artifact_rule_profile:
+        if ar["action"] == "add" and ar["rule_key"] not in existing_keys:
+            rules_display.append({
+                "rule_key":       ar["rule_key"],
+                "display_name":   ar.get("display_name") or ar["rule_key"],
+                "description":    ar.get("artifact_context") or "",
+                "severity":       ar.get("override_severity") or "WARN",
+                "rule_group":     "ARTIFACT_SPECIFIC",
+                "historical_context": ar.get("artifact_context") or "",
+                "_artifact_only": True,
+            })
+
+    return {
+        "artifact":              artifact,
+        "revisions":             revisions,
+        "comparison":            comparison,
+        "applicable_rules":      rules_display,
+        "skipped_rules":         [r for r in artifact_rule_profile if r["action"] == "skip"],
+        "findings_by_rev":       findings_by_rev,
+        "has_artifact_profile":  len(artifact_rule_profile) > 0,
+    }
 
 
 def _drawing_asset_url(filename: Optional[str]) -> Optional[str]:

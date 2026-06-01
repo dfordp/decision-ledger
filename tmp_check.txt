@@ -1,0 +1,6 @@
+Row 5 | C='✓' | B=Multi-format ingestion & format nor
+Row 6 | C='✓' | B=OCR scanning & title-block text ext
+Row 7 | C='✓' | B=GD&T symbol parsing (feature contro
+Row 9 | C='✓' | B=Geometry parsing — 2-D topology, se
+Row 11 | C='✓' | B=Feature extraction (holes, slots, c
+Row 12 | C='✓' | B=Dimension graph construction (spati

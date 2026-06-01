@@ -373,6 +373,187 @@
         .graph-edge { grid-template-columns: 1fr; }
         .comparison-table { grid-template-columns: 1fr; }
     }
+
+    /* ── Senior Reviewer Report ─────────────────────────────────────────────── */
+    .sr-header {
+        display: flex; align-items: flex-start; gap: 16px;
+        padding: 16px; background: linear-gradient(135deg,#f8fafc 0%,#eff6ff 100%);
+        border-radius: 10px; margin-bottom: 16px; border: 1px solid #dde8ff;
+    }
+    .sr-status-badge {
+        flex-shrink: 0; padding: 12px 14px; border-radius: 8px;
+        text-align: center; min-width: 118px;
+    }
+    .sr-status-badge.sr-BLOCK { background:#fef2f2; border:1.5px solid #fecaca; }
+    .sr-status-badge.sr-SAFE  { background:#ecfdf5; border:1.5px solid #a7f3d0; }
+    .sr-status-badge.sr-WARN  { background:#fffbeb; border:1.5px solid #fde68a; }
+    .sr-status-dot {
+        font-size: 11px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: .1em; margin-bottom: 5px;
+    }
+    .sr-BLOCK .sr-status-dot { color: #ef4444; }
+    .sr-SAFE  .sr-status-dot { color: #10b981; }
+    .sr-WARN  .sr-status-dot { color: #f59e0b; }
+    .sr-status-text {
+        font-size: 12px; font-weight: 800; line-height: 1.3;
+    }
+    .sr-BLOCK .sr-status-text { color: #dc2626; }
+    .sr-SAFE  .sr-status-text { color: #059669; }
+    .sr-WARN  .sr-status-text { color: #b45309; }
+    .sr-meta { flex: 1; min-width: 0; }
+    .sr-part { font-size: 14px; font-weight: 700; color: #0f1929; }
+    .sr-program { font-size: 12px; color: #6b7a90; margin-top: 3px; }
+    .sr-counts { display: flex; gap: 7px; margin-top: 9px; flex-wrap: wrap; }
+    .sr-count-block { background:#fee2e2; color:#dc2626; border-radius:4px; padding:2px 9px; font-size:11px; font-weight:700; }
+    .sr-count-warn  { background:#fef3c7; color:#b45309; border-radius:4px; padding:2px 9px; font-size:11px; font-weight:700; }
+
+    .sr-exec {
+        padding: 14px 16px; background: #fff;
+        border: 1px solid #e2e7ef; border-radius: 8px; margin-bottom: 14px;
+    }
+    .sr-section-label {
+        font-size: 10px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: .07em; color: #9ba8b7; margin-bottom: 7px;
+    }
+    .sr-exec-text { font-size: 13px; line-height: 1.75; color: #374151; margin: 0; }
+
+    .sr-findings-label { margin-bottom: 10px; }
+    .sr-findings-list { display: grid; gap: 8px; margin-bottom: 16px; }
+    .sr-finding {
+        border: 1px solid #e2e7ef; border-left: 4px solid #e2e7ef;
+        border-radius: 8px; padding: 12px 14px; background: #fff;
+    }
+    .sr-finding.sr-finding-BLOCK { border-left-color:#ef4444; background:#fffafa; }
+    .sr-finding.sr-finding-WARN  { border-left-color:#f59e0b; background:#fffef6; }
+    .sr-finding-head {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    }
+    .sr-finding-num {
+        width:22px; height:22px; background:#e2e7ef; border-radius:50%;
+        display:flex; align-items:center; justify-content:center;
+        font-size:10px; font-weight:700; color:#6b7a90; flex-shrink:0;
+    }
+    .sr-finding-BLOCK .sr-finding-num { background:#fee2e2; color:#dc2626; }
+    .sr-finding-WARN  .sr-finding-num { background:#fef3c7; color:#b45309; }
+    .sr-finding-title { flex:1; font-weight:700; font-size:13px; line-height:1.3; }
+    .sr-finding-what {
+        font-size:12.5px; color:#4b5568; line-height:1.65; margin-bottom:7px;
+    }
+    .sr-hist-ctx {
+        display:flex; align-items:flex-start; gap:7px;
+        font-size:11.5px; color:#2563eb; background:#eff6ff;
+        border-radius:5px; padding:8px 10px; margin-bottom:7px; line-height:1.6;
+    }
+    .sr-hist-icon { flex-shrink:0; line-height:1.6; }
+    .sr-finding-action {
+        font-size:12px; color:#6b7a90; line-height:1.5;
+        border-top:1px solid #ebeef3; padding-top:7px; margin-top:7px;
+    }
+
+    .sr-all-clear {
+        display:flex; align-items:center; gap:9px;
+        padding:14px 16px; background:#ecfdf5; border:1.5px solid #a7f3d0;
+        border-radius:8px; font-size:13px; font-weight:600; color:#059669;
+        margin-bottom:16px;
+    }
+
+    .sr-history-list { display:grid; gap:8px; margin-bottom:16px; }
+    .sr-hist-card {
+        padding:12px 14px; background:#f8fafc;
+        border:1px solid #e2e7ef; border-radius:8px;
+    }
+    .sr-hist-head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+    .sr-hist-part { font-weight:700; font-size:13px; color:#0f1929; }
+    .sr-hist-meta { font-size:12px; color:#6b7a90; margin-bottom:5px; }
+    .sr-hist-dims {
+        font-size:11.5px; color:#374151;
+        font-family:'JetBrains Mono','Courier New',monospace; line-height:1.7;
+    }
+    .sr-hist-holes { font-size:11.5px; color:#374151; margin-top:3px; }
+
+    .sr-rec-list { margin:0 0 16px; padding-left:20px; }
+    .sr-rec-item { font-size:12.5px; color:#374151; line-height:1.7; margin-bottom:3px; }
+
+    .sr-footer {
+        font-size:11px; color:#c4cdd8; text-align:right;
+        padding-top:10px; border-top:1px solid #f0f2f6;
+    }
+    .sr-loading {
+        display:flex; align-items:center; gap:10px;
+        color:#9ba8b7; font-size:13px; padding:24px 0;
+    }
+    @keyframes sr-spin { to { transform:rotate(360deg); } }
+    .sr-spinner { display:inline-block; animation:sr-spin 1s linear infinite; }
+
+    /* Drawing preview: supports both PDF iframe and PNG img */
+    .pdf-wrap img { width:100%; max-height:540px; object-fit:contain; display:block; }
+
+    /* ── Annotation dots (replace old text chips) ─────────────────────────── */
+    .annot-dot {
+        position: absolute;
+        width: 18px; height: 18px;
+        border-radius: 50%;
+        border: 2.5px solid rgba(255,255,255,.9);
+        cursor: pointer;
+        transform: translate(-50%, -50%);
+        transition: transform .15s, box-shadow .15s;
+        box-shadow: 0 2px 8px rgba(0,0,0,.35);
+        z-index: 20;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .annot-dot:hover {
+        transform: translate(-50%,-50%) scale(1.45);
+        box-shadow: 0 4px 16px rgba(0,0,0,.5);
+        z-index: 30;
+    }
+    .annot-dot.BLOCK { background: #ef4444; }
+    .annot-dot.WARN  { background: #f59e0b; }
+    .annot-dot.SAFE  { background: #10b981; }
+
+    /* Pulse ring on BLOCK dots */
+    .annot-dot.BLOCK::after {
+        content: '';
+        position: absolute; inset: -5px;
+        border-radius: 50%;
+        border: 2px solid rgba(239,68,68,.5);
+        animation: dot-pulse 1.8s ease-out infinite;
+    }
+    @keyframes dot-pulse {
+        0%   { transform: scale(.8); opacity: .9; }
+        70%  { transform: scale(1.6); opacity: 0; }
+        100% { transform: scale(.8); opacity: 0; }
+    }
+
+    /* Tooltip on hover */
+    .annot-dot[data-tip]::before {
+        content: attr(data-tip);
+        position: absolute;
+        bottom: calc(100% + 9px);
+        left: 50%; transform: translateX(-50%);
+        background: #0f1929;
+        color: #fff;
+        font-size: 11px; font-weight: 600;
+        padding: 5px 9px;
+        border-radius: 6px;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity .15s;
+        max-width: 220px;
+        white-space: normal;
+        text-align: center;
+        line-height: 1.4;
+        z-index: 40;
+    }
+    .annot-dot[data-tip]:hover::before { opacity: 1; }
+
+    /* Highlight pulse on finding card when scrolled-to */
+    @keyframes card-flash {
+        0%   { box-shadow: 0 0 0 0 rgba(79,110,247,.6); }
+        50%  { box-shadow: 0 0 0 8px rgba(79,110,247,.2); }
+        100% { box-shadow: 0 0 0 0 rgba(79,110,247,0); }
+    }
+    .finding-flash { animation: card-flash .7s ease-out 2; }
 </style>
 {% endblock %}
 
@@ -445,16 +626,35 @@
     <div class="workspace-cols">
 
         <main>
-            <!-- Drawing Preview -->
+            <!-- ── Drawing Review ─────────────────────────────────────────── -->
             <div class="card panel">
                 <div class="panel-head">
-                    <span class="panel-title">Drawing Preview</span>
+                    <span class="panel-title">Drawing Review</span>
+                    {% if drawing_annots %}
+                    <span class="count-bubble" style="background:#fee2e2;color:#dc2626;">
+                        {{ drawing_annots | selectattr('status','equalto','BLOCK') | list | length }} BLOCK
+                    </span>
+                    <span class="count-bubble" style="background:#fffbeb;color:#b45309;">
+                        {{ drawing_annots | selectattr('status','equalto','WARN') | list | length }} WARN
+                    </span>
+                    {% endif %}
+                    <span style="font-size:11px;color:#9ba8b7;margin-left:auto;">
+                        Click a dot to jump to its finding ↓
+                    </span>
                 </div>
 
-                <!-- PDF with finding chips overlaid -->
-                <div class="pdf-wrap">
+                <!-- Drawing (PDF iframe or PNG image) with annotation dots overlaid -->
+                <div class="pdf-wrap" id="drawingWrap">
                     {% if drawing_pdf_url %}
-                    <iframe src="{{ drawing_pdf_url }}" title="Revision drawing"></iframe>
+                    {% if drawing_pdf_url.endswith('.png') or drawing_pdf_url.endswith('.jpg') %}
+                    <img src="{{ drawing_pdf_url }}"
+                         id="drawingImg"
+                         alt="Revision drawing {{ session.design_revision_code }}"
+                         onload="renderAnnotDots()" />
+                    {% else %}
+                    <iframe src="{{ drawing_pdf_url }}" title="Revision drawing"
+                            onload="renderAnnotDots()"></iframe>
+                    {% endif %}
                     {% else %}
                     <div class="pdf-empty">
                         <span class="pdf-empty-icon">📄</span>
@@ -463,29 +663,8 @@
                     </div>
                     {% endif %}
 
-                    <!-- Finding chips overlaid on PDF -->
-                    <div class="pdf-overlay">
-                        {% set chip_positions = [
-                            ("30%", "13%"),
-                            ("56%", "19%"),
-                            ("31%", "54%"),
-                            ("64%", "64%")
-                        ] %}
-                        {% for finding in findings[:4] %}
-                        {% set pos = chip_positions[loop.index0] %}
-                        <div class="find-chip {{ finding.status }}"
-                             style="left:{{ pos[0] }}; top:{{ pos[1] }};"
-                             title="{{ finding.explanation }}">
-                            <span class="chip-dot"></span>
-                            {{ finding.title }}
-                        </div>
-                        {% endfor %}
-                        {% if not findings %}
-                        <div class="find-chip SAFE" style="left:8%; top:10%;">
-                            <span class="chip-dot"></span>No findings — reference-ready
-                        </div>
-                        {% endif %}
-                    </div>
+                    <!-- Dot overlay container — populated by JS -->
+                    <div class="pdf-overlay" id="annotOverlay" style="pointer-events:none;z-index:20;"></div>
                 </div>
 
                 <!-- PRT download bar (shown only when PRT exists) -->
@@ -506,6 +685,23 @@
                 {% endif %}
             </div>
 
+            <!-- ── Senior Reviewer Assessment (below drawing) ─────────────── -->
+            {% if session.design_revision_id %}
+            <div class="card panel" id="seniorReportPanel">
+                <div class="panel-head">
+                    <span class="panel-title">Senior Reviewer Assessment</span>
+                    <span id="srBadgeWrap" style="display:none;"></span>
+                    <span id="srLoadMsg" class="fine" style="margin-left:auto;color:#9ba8b7;">Loading…</span>
+                </div>
+                <div id="seniorReportContent">
+                    <div class="sr-loading">
+                        <span class="sr-spinner">⟳</span>
+                        Generating assessment from validation results and engineering history…
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Review Items -->
             {% if items %}
             <div class="card panel">
@@ -513,9 +709,9 @@
                     <span class="panel-title">Review Items</span>
                     <span class="count-bubble">{{ items|length }}</span>
                 </div>
-                <div class="item-list">
+                <div class="item-list" id="itemList">
                     {% for item in items %}
-                    <div class="item-row">
+                    <div class="item-row" id="item-{{ item.source_id }}">
                         <span class="item-type-tag">{{ item.item_type | replace('_', ' ') }}</span>
                         <div class="item-body">
                             <div class="item-title">{{ item.title }}</div>
@@ -581,7 +777,7 @@
                 {% if rule_results %}
                 <div class="rule-list">
                     {% for result in rule_results %}
-                    <div class="rule-card {{ result.status }}">
+                    <div class="rule-card {{ result.status }}" id="vr-{{ result.rule_key }}">
                         <div class="rule-head">
                             <span class="rule-name">{{ result.display_name or result.rule_key }}</span>
                             <span class="badge badge-{{ result.status }}">{{ result.status }}</span>
@@ -952,9 +1148,238 @@ function toggleDimensionDetails(element) {
     }
 }
 
-// Load analysis when page loads
+// ============================================================================
+// ANNOTATION DOTS — interactive dots overlaid on the drawing image
+// ============================================================================
+
+// Inject drawing annotation data from server
+const _DRAWING_ANNOTS = {{ drawing_annots | tojson }};
+
+function renderAnnotDots() {
+    const overlay = document.getElementById('annotOverlay');
+    const wrap    = document.getElementById('drawingWrap');
+    if (!overlay || !wrap || !_DRAWING_ANNOTS.length) return;
+
+    // Allow pointer events on overlay so dots are clickable
+    overlay.style.pointerEvents = 'none';
+    overlay.innerHTML = '';
+
+    _DRAWING_ANNOTS.forEach(function(a) {
+        const dot = document.createElement('div');
+        dot.className = 'annot-dot ' + a.status;
+        dot.style.left = a.x_pct + '%';
+        dot.style.top  = a.y_pct + '%';
+        dot.style.pointerEvents = 'auto';
+
+        // Tooltip: status + short title (max 40 chars)
+        const tipText = '[' + a.status + '] ' + (a.title || a.rule_key).substring(0, 50);
+        dot.setAttribute('data-tip', tipText);
+        dot.setAttribute('data-rule', a.rule_key);
+        dot.title = a.title + (a.description ? '\n' + a.description.substring(0, 120) : '');
+
+        dot.addEventListener('click', function(e) {
+            e.stopPropagation();
+            scrollToFinding(a.rule_key);
+        });
+
+        overlay.appendChild(dot);
+    });
+}
+
+function scrollToFinding(ruleKey) {
+    // Try validation results card first, then items, then senior report finding
+    const targets = [
+        document.getElementById('vr-' + ruleKey),
+        document.querySelector('[data-rule-key="' + ruleKey + '"]'),
+        // Search within sr-findings for matching title
+    ];
+    let target = targets.find(Boolean);
+
+    // Also try finding a matching sr-finding by scanning text
+    if (!target) {
+        document.querySelectorAll('.sr-finding').forEach(function(el) {
+            const titleEl = el.querySelector('.sr-finding-title');
+            if (titleEl && titleEl.textContent.toLowerCase().includes(ruleKey.toLowerCase().replace(/_/g,' '))) {
+                target = el;
+            }
+        });
+    }
+
+    if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Flash animation
+        target.classList.remove('finding-flash');
+        void target.offsetWidth; // reflow to restart animation
+        target.classList.add('finding-flash');
+        setTimeout(function() { target.classList.remove('finding-flash'); }, 1600);
+    }
+}
+
+// Re-render dots on window resize so positions stay accurate
+window.addEventListener('resize', function() {
+    renderAnnotDots();
+});
+
+// Trigger dot render on load (for non-image cases / late paint)
 document.addEventListener('DOMContentLoaded', function() {
     loadRevisionAnalysis();
+    loadSeniorReport();
+    // Attempt immediate render; also fires on img onload
+    setTimeout(renderAnnotDots, 300);
 });
+
+// ============================================================================
+// SENIOR REVIEWER REPORT
+// ============================================================================
+
+const _SR_DESIGN_REVISION_ID = "{{ session.design_revision_id or '' }}";
+
+async function loadSeniorReport() {
+    if (!_SR_DESIGN_REVISION_ID) return;
+    const panel = document.getElementById('seniorReportPanel');
+    if (!panel) return;
+
+    try {
+        const res = await fetch(`/api/design-revisions/${_SR_DESIGN_REVISION_ID}/senior-report`);
+        if (!res.ok) {
+            document.getElementById('srLoadMsg').textContent = 'Report unavailable';
+            return;
+        }
+        const report = await res.json();
+        renderSeniorReport(report);
+    } catch (e) {
+        document.getElementById('srLoadMsg').textContent = 'Could not load report';
+    }
+}
+
+function _escHtml(s) {
+    if (!s) return '';
+    return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderSeniorReport(r) {
+    // ── Header ─────────────────────────────────────────────────────────────
+    const blockCount = r.block_count || 0;
+    const warnCount  = r.warn_count  || 0;
+
+    const countsHtml = blockCount
+        ? `<div class="sr-counts">
+               <span class="sr-count-block">${blockCount} BLOCK</span>
+               ${warnCount ? `<span class="sr-count-warn">${warnCount} WARN</span>` : ''}
+           </div>`
+        : (warnCount ? `<div class="sr-counts"><span class="sr-count-warn">${warnCount} WARN</span></div>` : '');
+
+    let html = `
+        <div class="sr-header">
+            <div class="sr-status-badge sr-${_escHtml(r.status_badge)}">
+                <div class="sr-status-dot">${_escHtml(r.status_badge)}</div>
+                <div class="sr-status-text">${_escHtml(r.status_label)}</div>
+            </div>
+            <div class="sr-meta">
+                <div class="sr-part">${_escHtml(r.artifact_number)} · ${_escHtml(r.revision_code)}</div>
+                <div class="sr-program">${_escHtml(r.vehicle_program || '')}${r.product_segment ? ' · ' + _escHtml(r.product_segment.replace(/_/g,' ')) : ''}${r.assembly_family ? ' / ' + _escHtml(r.assembly_family.replace(/_/g,' ')) : ''}</div>
+                ${countsHtml}
+            </div>
+        </div>
+    `;
+
+    // ── Executive summary ─────────────────────────────────────────────────
+    html += `
+        <div class="sr-exec">
+            <div class="sr-section-label">Executive Summary</div>
+            <p class="sr-exec-text">${_escHtml(r.executive_summary)}</p>
+        </div>
+    `;
+
+    // ── Findings ──────────────────────────────────────────────────────────
+    const findings = r.finding_sections || [];
+    if (findings.length > 0) {
+        html += `<div class="sr-section-label sr-findings-label">Findings — ${blockCount} BLOCK · ${warnCount} WARN</div>`;
+        html += `<div class="sr-findings-list">`;
+        for (const f of findings) {
+            const histHtml = (f.historical_context && f.historical_context.length)
+                ? `<div class="sr-hist-ctx">
+                       <span class="sr-hist-icon">📋</span>
+                       <span>${f.historical_context.map(_escHtml).join('<br>')}</span>
+                   </div>`
+                : '';
+            html += `
+                <div class="sr-finding sr-finding-${_escHtml(f.status)}">
+                    <div class="sr-finding-head">
+                        <span class="sr-finding-num sr-finding-${_escHtml(f.status)}">${f.index}</span>
+                        <span class="sr-finding-title">${_escHtml(f.title)}</span>
+                        <span class="badge badge-${_escHtml(f.status)}" style="flex-shrink:0;">${_escHtml(f.status)}</span>
+                        <span class="fine" style="font-size:10.5px;flex-shrink:0;">${_escHtml(f.severity)}</span>
+                    </div>
+                    ${f.what ? `<div class="sr-finding-what">${_escHtml(f.what)}</div>` : ''}
+                    ${histHtml}
+                    ${f.action ? `<div class="sr-finding-action">→ ${_escHtml(f.action)}</div>` : ''}
+                </div>
+            `;
+        }
+        html += `</div>`;
+    } else {
+        html += `
+            <div class="sr-all-clear">
+                <span style="font-size:16px;">✓</span>
+                No blocking findings — drawing aligns with the approved production baseline.
+            </div>
+        `;
+    }
+
+    // ── Engineering history ───────────────────────────────────────────────
+    const history = r.engineering_history || [];
+    if (history.length > 0) {
+        html += `<div class="sr-section-label">From Engineering History</div>`;
+        html += `<div class="sr-history-list">`;
+        for (const p of history) {
+            const dimsHtml = (p.key_dimensions && p.key_dimensions.length)
+                ? `<div class="sr-hist-dims">${p.key_dimensions.slice(0,5).map(_escHtml).join(' · ')}</div>`
+                : '';
+            const holesHtml = (p.hole_callouts && p.hole_callouts !== '—')
+                ? `<div class="sr-hist-holes">Hole callouts: ${_escHtml(p.hole_callouts)}</div>`
+                : '';
+            html += `
+                <div class="sr-hist-card">
+                    <div class="sr-hist-head">
+                        <span class="sr-hist-part">${_escHtml(p.artifact_number)}</span>
+                        <span class="badge badge-SAFE" style="font-size:10px;">Production Ref</span>
+                    </div>
+                    <div class="sr-hist-meta">${_escHtml(p.vehicle_program || '')} · ${_escHtml(p.revision_code)}</div>
+                    ${dimsHtml}${holesHtml}
+                </div>
+            `;
+        }
+        html += `</div>`;
+    }
+
+    // ── Recommendations (BLOCK items only) ───────────────────────────────
+    const recs = (r.recommendations || []).filter(rc => rc.status === 'BLOCK');
+    if (recs.length > 0) {
+        html += `<div class="sr-section-label">Recommended Path to Release</div>`;
+        html += `<ol class="sr-rec-list">`;
+        for (const rec of recs) {
+            html += `<li class="sr-rec-item">${_escHtml(rec.action)}</li>`;
+        }
+        html += `</ol>`;
+    }
+
+    // ── Footer ────────────────────────────────────────────────────────────
+    const ts = r.generated_at ? new Date(r.generated_at + 'Z').toLocaleString() : '';
+    html += `<div class="sr-footer">ReviewGraph deterministic assessment engine${ts ? ' · ' + ts : ''}</div>`;
+
+    document.getElementById('seniorReportContent').innerHTML = html;
+
+    // Update panel header badge
+    const badgeWrap = document.getElementById('srBadgeWrap');
+    if (badgeWrap) {
+        badgeWrap.style.display = '';
+        badgeWrap.innerHTML = `<span class="badge badge-${_escHtml(r.status_badge)}">${_escHtml(r.status_badge)}</span>`;
+    }
+    const loadMsg = document.getElementById('srLoadMsg');
+    if (loadMsg) loadMsg.textContent = '';
+}
 </script>
 {% endblock %}

@@ -490,6 +490,25 @@ def validate_drawing_revision(design_revision_id: str, design_data: dict) -> lis
             except (TypeError, ValueError):
                 pass
 
+    # ── Segment-specific rule violations ────────────────────────────────────────
+    # Seed data (and future extraction) writes segment findings into
+    # validation_profile["segment_rule_violations"] as a list of dicts.
+    # Each dict: {rule_key, severity, title, what, why, action, entity, region}
+    for item in _profile_items(design_data, "segment_rule_violations"):
+        if not isinstance(item, dict) or not item.get("rule_key"):
+            continue
+        results.append(_result(
+            rule_key=item["rule_key"],
+            severity=item.get("severity", "MAJOR"),
+            title=item.get("title") or item["rule_key"].replace("_", " ").title(),
+            what=item.get("what") or "Segment-specific violation detected.",
+            why=item.get("why") or "This rule applies to the product segment of this drawing.",
+            affected_entities=[item.get("entity") or "Drawing"],
+            affected_regions=[item.get("region") or "Sheet 1"],
+            action=item.get("action") or "Review and resolve before release.",
+            evidence=item,
+        ))
+
     execute_query("DELETE FROM drawing_validation_results WHERE design_revision_id = %s::uuid", (design_revision_id,))
     for result in results:
         execute_query("""
@@ -622,9 +641,13 @@ def get_mock_bracket_variants() -> list[dict]:
         "title": "Sheet Metal Mounting Bracket Family",
         "artifact_type": "ENGINEERING_DRAWING",
         "domain": "MECHANICAL",
+        "product_segment": "POWERTRAIN",
+        "assembly_family": "ENGINE_MOUNTS",
+        "vehicle_program": "NOVA-HB-24 Hatchback",
         "linked_part_number": "HORN-HSG-2705",
         "material": "CRCA Sheet Metal 1.5 mm",
         "supplier": "Demo Fabrication Supplier",
+        "owning_team": "Powertrain Structures",
     }
     return [
         {

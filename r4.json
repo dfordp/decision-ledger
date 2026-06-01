@@ -1,93 +1,93 @@
-{
-  "approval_status": "REVIEW_REQUIRED",
-  "process": "Laser Cut + Bend",
-  "material_spec": "CRCA IS 513 Grade D",
-  "title_block": {
-    "drawing_number": "HORN-HSG-2705",
-    "revision": "R4",
-    "material": "CRCA IS 513 GR.D",
-    "thickness": "1.5 mm",
-    "process": "Laser Cut + Bend",
-    "approval_status": "REVIEW_REQUIRED"
-  },
-  "geometric_entities": [
-    { "id": "OUTER_PROFILE", "name": "Bracket outer profile", "region": "Main view" },
-    { "id": "SIDE_CUT",      "name": "Side cut feature",       "region": "Right side profile" }
-  ],
-  "mounting_holes": [
-    { "id": "MH-L", "name": "Left mounting hole",  "region": "Mounting-hole layout", "diameter": 13.0, "quantity": 1 },
-    { "id": "MH-R", "name": "Right mounting hole", "region": "Mounting-hole layout", "diameter": 12.0, "quantity": 1 }
-  ],
-  "flanges": [
-    { "id": "FLANGE-A", "name": "Primary bend flange", "region": "Section A-A" }
-  ],
-  "bend_features": [
-    { "id": "BEND-1", "name": "90 degree bend", "region": "Section A-A",
-      "bend_angle": 90, "bend_radius": 2.5, "k_factor": 0.33 }
-  ],
-  "section_geometry": [
-    { "id": "SEC-AA-GEOM", "name": "Section A-A profile", "region": "Section A-A" }
-  ],
-  "cutouts": [
-    { "id": "SLOT-1", "name": "Slot feature", "region": "Lower feature layout",
-      "feature_type": "slot", "width": 22.1, "length": 31.5 }
-  ],
-  "hole_callouts": [],
-  "section_labels": [],
-  "thickness_annotations": [
-    { "id": "THK-15", "text": "THK 1.5 mm", "region": "Section A-A" }
-  ],
-  "material_notes": [
-    { "id": "MAT-CRCA", "text": "MATERIAL: CRCA IS 513 GR.D  THK 1.5 mm", "region": "Title block" }
-  ],
-  "drawing_notes": [
-    { "id": "NOTE-GEN", "text": "GENERAL TOLERANCE: ISO 2768-m UNLESS OTHERWISE STATED.", "region": "Notes" },
-    { "id": "NOTE-ECR", "text": "ECR-2705-004: Hole position updated per assembly clearance review.", "region": "Notes" }
-  ],
-  "dimensions": [
-    { "id": "D-OVERALL-H",  "name": "Overall height",             "nominal": 152.1, "unit": "mm",
-      "tolerance": { "plus": 0.50, "minus": 0.50 }, "region": "Main view" },
-    { "id": "D-OVERALL-W",  "name": "Overall width",              "nominal": 77.5,  "unit": "mm",
-      "tolerance": { "plus": 0.30, "minus": 0.30 }, "region": "Main view" },
-    { "id": "D-BODY-H",     "name": "Body height",                "nominal": 101.9, "unit": "mm",
-      "tolerance": { "plus": 0.30, "minus": 0.30 }, "region": "Main view" },
-    { "id": "D-HOLE-HPOS",  "name": "Hole horizontal position",   "nominal": 41.5,  "unit": "mm",
-      "critical": true, "tolerance": { "plus": 0.10, "minus": 0.10 }, "region": "Mounting-hole layout" },
-    { "id": "D-LOWER-REF",  "name": "Lower feature reference",    "nominal": 31.5,  "unit": "mm",
-      "critical": true, "tolerance": { "plus": 0.10, "minus": 0.10 }, "region": "Lower feature layout" },
-    { "id": "D-UPPER-REF",  "name": "Upper horizontal reference", "nominal": 78.9,  "unit": "mm",
-      "tolerance": { "plus": 0.20, "minus": 0.20 }, "region": "Upper feature layout" },
-    { "id": "D-FLANGE-OFF", "name": "Flange vertical offset",     "nominal": 46.0,  "unit": "mm",
-      "tolerance": { "plus": 0.20, "minus": 0.20 }, "region": "Section A-A" },
-    { "id": "D-SLOT-W",     "name": "Slot width",                 "nominal": 22.1,  "unit": "mm",
-      "critical": true, "region": "Lower feature layout" },
-    { "id": "D-MHL-DIA",    "name": "Left hole diameter (Ø13)",   "nominal": 13.0,  "unit": "mm",
-      "critical": true, "tolerance": { "plus": 0.11, "minus": 0.00 }, "region": "Mounting-hole layout" },
-    { "id": "D-MHR-DIA",    "name": "Right hole diameter (Ø12)",  "nominal": 12.0,  "unit": "mm",
-      "critical": true, "tolerance": { "plus": 0.11, "minus": 0.00 }, "region": "Mounting-hole layout" }
-  ],
-  "validation_profile": {
-    "missing_hole_callouts": [
-      { "name": "Left mounting hole Ø13",  "region": "Mounting-hole layout",
-        "note": "Callout text 'Ø13 THRU' and H11 fit class annotation absent from this draft." },
-      { "name": "Right mounting hole Ø12", "region": "Mounting-hole layout",
-        "note": "Callout text 'Ø12 THRU' and H11 fit class annotation absent from this draft." }
-    ],
-    "missing_section_references": [
-      { "name": "Section A-A label", "region": "Section A-A",
-        "note": "Section cut line and 'SECTION A-A' label missing — bend profile uninterpretable by fabrication." }
-    ],
-    "missing_tolerances": [
-      { "name": "Slot width 22.1 mm",       "region": "Lower feature layout", "nominal": 22.1, "unit": "mm",
-        "note": "Unilateral tolerance +0.05/-0.00 required per approved reference R3. Omitted from this draft." }
-    ],
-    "incomplete_dimension_chains": [
-      { "name": "Hole position datum chain", "region": "Mounting-hole layout",
-        "note": "Hole horizontal position changed to 41.5 mm from approved 38.3 mm. Datum-B chain not updated — CMM inspection traceability broken." }
-    ],
-    "mixed_fastener_sizes": [
-      { "name": "Left Ø13 / Right Ø12 mounting holes", "region": "Mounting-hole layout",
-        "note": "Asymmetric hole diameters imply different fastener standards. Confirm against assembly BOM before release." }
-    ]
-  }
-}
+    {
+      "approval_status": "REVIEW_REQUIRED",
+      "process": "Laser Cut + Bend",
+      "material_spec": "CRCA IS 513 Grade D",
+      "title_block": {
+        "drawing_number": "HORN-HSG-2705",
+        "revision": "R4",
+        "material": "CRCA IS 513 GR.D",
+        "thickness": "1.5 mm",
+        "process": "Laser Cut + Bend",
+        "approval_status": "REVIEW_REQUIRED"
+      },
+      "geometric_entities": [
+        { "id": "OUTER_PROFILE", "name": "Bracket outer profile", "region": "Main view" },
+        { "id": "SIDE_CUT",      "name": "Side cut feature",       "region": "Right side profile" }
+      ],
+      "mounting_holes": [
+        { "id": "MH-L", "name": "Left mounting hole",  "region": "Mounting-hole layout", "diameter": 13.0, "quantity": 1 },
+        { "id": "MH-R", "name": "Right mounting hole", "region": "Mounting-hole layout", "diameter": 12.0, "quantity": 1 }
+      ],
+      "flanges": [
+        { "id": "FLANGE-A", "name": "Primary bend flange", "region": "Section A-A" }
+      ],
+      "bend_features": [
+        { "id": "BEND-1", "name": "90 degree bend", "region": "Section A-A",
+          "bend_angle": 90, "bend_radius": 2.5, "k_factor": 0.33 }
+      ],
+      "section_geometry": [
+        { "id": "SEC-AA-GEOM", "name": "Section A-A profile", "region": "Section A-A" }
+      ],
+      "cutouts": [
+        { "id": "SLOT-1", "name": "Slot feature", "region": "Lower feature layout",
+          "feature_type": "slot", "width": 22.1, "length": 31.5 }
+      ],
+      "hole_callouts": [],
+      "section_labels": [],
+      "thickness_annotations": [
+        { "id": "THK-15", "text": "THK 1.5 mm", "region": "Section A-A" }
+      ],
+      "material_notes": [
+        { "id": "MAT-CRCA", "text": "MATERIAL: CRCA IS 513 GR.D  THK 1.5 mm", "region": "Title block" }
+      ],
+      "drawing_notes": [
+        { "id": "NOTE-GEN", "text": "GENERAL TOLERANCE: ISO 2768-m UNLESS OTHERWISE STATED.", "region": "Notes" },
+        { "id": "NOTE-ECR", "text": "ECR-2705-004: Hole position updated per assembly clearance review.", "region": "Notes" }
+      ],
+      "dimensions": [
+        { "id": "D-OVERALL-H",  "name": "Overall height",             "nominal": 152.1, "unit": "mm",
+          "tolerance": { "plus": 0.50, "minus": 0.50 }, "region": "Main view" },
+        { "id": "D-OVERALL-W",  "name": "Overall width",              "nominal": 77.5,  "unit": "mm",
+          "tolerance": { "plus": 0.30, "minus": 0.30 }, "region": "Main view" },
+        { "id": "D-BODY-H",     "name": "Body height",                "nominal": 101.9, "unit": "mm",
+          "tolerance": { "plus": 0.30, "minus": 0.30 }, "region": "Main view" },
+        { "id": "D-HOLE-HPOS",  "name": "Hole horizontal position",   "nominal": 41.5,  "unit": "mm",
+          "critical": true, "tolerance": { "plus": 0.10, "minus": 0.10 }, "region": "Mounting-hole layout" },
+        { "id": "D-LOWER-REF",  "name": "Lower feature reference",    "nominal": 31.5,  "unit": "mm",
+          "critical": true, "tolerance": { "plus": 0.10, "minus": 0.10 }, "region": "Lower feature layout" },
+        { "id": "D-UPPER-REF",  "name": "Upper horizontal reference", "nominal": 78.9,  "unit": "mm",
+          "tolerance": { "plus": 0.20, "minus": 0.20 }, "region": "Upper feature layout" },
+        { "id": "D-FLANGE-OFF", "name": "Flange vertical offset",     "nominal": 46.0,  "unit": "mm",
+          "tolerance": { "plus": 0.20, "minus": 0.20 }, "region": "Section A-A" },
+        { "id": "D-SLOT-W",     "name": "Slot width",                 "nominal": 22.1,  "unit": "mm",
+          "critical": true, "region": "Lower feature layout" },
+        { "id": "D-MHL-DIA",    "name": "Left hole diameter (Ø13)",   "nominal": 13.0,  "unit": "mm",
+          "critical": true, "tolerance": { "plus": 0.11, "minus": 0.00 }, "region": "Mounting-hole layout" },
+        { "id": "D-MHR-DIA",    "name": "Right hole diameter (Ø12)",  "nominal": 12.0,  "unit": "mm",
+          "critical": true, "tolerance": { "plus": 0.11, "minus": 0.00 }, "region": "Mounting-hole layout" }
+      ],
+      "validation_profile": {
+        "missing_hole_callouts": [
+          { "name": "Left mounting hole Ø13",  "region": "Mounting-hole layout",
+            "note": "Callout text 'Ø13 THRU' and H11 fit class annotation absent from this draft." },
+          { "name": "Right mounting hole Ø12", "region": "Mounting-hole layout",
+            "note": "Callout text 'Ø12 THRU' and H11 fit class annotation absent from this draft." }
+        ],
+        "missing_section_references": [
+          { "name": "Section A-A label", "region": "Section A-A",
+            "note": "Section cut line and 'SECTION A-A' label missing — bend profile uninterpretable by fabrication." }
+        ],
+        "missing_tolerances": [
+          { "name": "Slot width 22.1 mm",       "region": "Lower feature layout", "nominal": 22.1, "unit": "mm",
+            "note": "Unilateral tolerance +0.05/-0.00 required per approved reference R3. Omitted from this draft." }
+        ],
+        "incomplete_dimension_chains": [
+          { "name": "Hole position datum chain", "region": "Mounting-hole layout",
+            "note": "Hole horizontal position changed to 41.5 mm from approved 38.3 mm. Datum-B chain not updated — CMM inspection traceability broken." }
+        ],
+        "mixed_fastener_sizes": [
+          { "name": "Left Ø13 / Right Ø12 mounting holes", "region": "Mounting-hole layout",
+            "note": "Asymmetric hole diameters imply different fastener standards. Confirm against assembly BOM before release." }
+        ]
+      }
+    }

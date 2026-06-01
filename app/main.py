@@ -44,11 +44,18 @@ from app.review_graph import (
     update_review_session_notes,
 )
 from app.design_review import (
+    build_design_data_from_variant,
     create_design_artifact,
     create_design_revision,
     create_review_session_from_design_revision,
+    extract_drawing_variant,
+    generate_senior_reviewer_report,
     get_design_artifact_detail,
+    get_part_search_categories,
+    get_review_preview,
     list_design_artifacts,
+    run_groq_validation,
+    search_design_artifacts,
     seed_mock_bracket_review_data,
 )
 
@@ -2636,6 +2643,97 @@ async def view_hierarchy(request: Request):
     })
 
 
+@app.get("/api/part-search")
+async def api_part_search(
+    q: str = "",
+    vehicle_program: str = "",
+    assembly_family: str = "",
+    product_segment: str = "",
+    domain: str = "",
+    owning_team: str = "",
+    supplier: str = "",
+):
+    """JSON endpoint for live part search."""
+    results = search_design_artifacts(
+        q=q,
+        vehicle_program=vehicle_program,
+        assembly_family=assembly_family,
+        product_segment=product_segment,
+        domain=domain,
+        owning_team=owning_team,
+        supplier=supplier,
+    )
+    return [
+        {
+            "id": str(r["id"]),
+            "artifact_number": r["artifact_number"],
+            "title": r["title"],
+            "vehicle_program": r.get("vehicle_program") or "",
+            "product_segment": r.get("product_segment") or "",
+            "assembly_family": r.get("assembly_family") or "",
+            "domain": r.get("domain") or "",
+            "supplier": r.get("supplier") or "",
+            "revision_count": r.get("revision_count") or 0,
+            "latest_approval_status": r.get("latest_approval_status") or "",
+            "has_approved_revision": bool(r.get("has_approved_revision")),
+        }
+        for r in results
+    ]
+
+
+@app.get("/part-search", response_class=HTMLResponse)
+async def part_search_page(request: Request):
+    """Part search landing — browse by category."""
+    categories = get_part_search_categories()
+    return templates.TemplateResponse("part_search.html", {
+        "request": request,
+        **categories,
+    })
+
+
+@app.get("/part-search/results", response_class=HTMLResponse)
+async def part_search_results_page(
+    request: Request,
+    q: str = "",
+    vehicle_program: str = "",
+    assembly_family: str = "",
+    product_segment: str = "",
+    domain: str = "",
+    owning_team: str = "",
+    supplier: str = "",
+):
+    """Part search results page."""
+    results = search_design_artifacts(
+        q=q,
+        vehicle_program=vehicle_program,
+        assembly_family=assembly_family,
+        product_segment=product_segment,
+        domain=domain,
+        owning_team=owning_team,
+        supplier=supplier,
+    )
+    active_filters = {k: v for k, v in {
+        "Vehicle Program": vehicle_program,
+        "Assembly Family": assembly_family,
+        "Product Segment": product_segment,
+        "Domain": domain,
+        "Owning Team": owning_team,
+        "Supplier": supplier,
+    }.items() if v}
+    return templates.TemplateResponse("part_search_results.html", {
+        "request": request,
+        "results": results,
+        "q": q,
+        "active_filters": active_filters,
+        "vehicle_program": vehicle_program,
+        "assembly_family": assembly_family,
+        "product_segment": product_segment,
+        "domain": domain,
+        "owning_team": owning_team,
+        "supplier": supplier,
+    })
+
+
 @app.get("/design-intake", response_class=HTMLResponse)
 async def design_intake_page(request: Request):
     """Design-data-first ReviewGraph intake workspace."""
@@ -2757,6 +2855,99 @@ async def seed_bracket_drawing_validation_demo():
         raise HTTPException(status_code=500, detail=f"Could not create drawing validation demo data: {exc}")
 
 
+@app.post("/api/design-artifacts/{artifact_id}/extract-drawing")
+async def extract_drawing_api(artifact_id: str, file: UploadFile = File(...)):
+    """
+    Accept a drawing image/PDF upload, run 3-pass deterministic extraction,
+    and return structured data for the user to review and edit in the modal.
+    """
+    try:
+        artifact = fetch_one(
+            "SELECT id, artifact_number, material FROM design_artifacts WHERE id = %s::uuid",
+            (artifact_id,),
+        )
+        if not artifact:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+
+        # Save file to static/drawings/
+        from pathlib import Path as _Path
+        drawings_dir = _Path("app/static/drawings")
+        drawings_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = file.filename.replace(" ", "_")
+        dest = drawings_dir / safe_name
+        contents = await file.read()
+        dest.write_bytes(contents)
+
+        result = extract_drawing_variant(safe_name, artifact_id)
+        return JSONResponse(result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {exc}")
+
+
+@app.post("/api/design-artifacts/{artifact_id}/create-variant")
+async def create_variant_api(artifact_id: str, request: Request):
+    """
+    Accept the user-confirmed extraction data and create a design variant (revision).
+    Immediately creates the review session and returns a redirect URL.
+    """
+    try:
+        artifact = fetch_one(
+            "SELECT id, artifact_number, material FROM design_artifacts WHERE id = %s::uuid",
+            (artifact_id,),
+        )
+        if not artifact:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+
+        body = await request.json()
+        design_data = build_design_data_from_variant(body, dict(artifact))
+
+        # Find a free revision code if the requested one is already taken
+        requested_code = body.get("variant_code") or "R1"
+        existing = fetch_all(
+            "SELECT revision_code FROM design_revisions WHERE artifact_id = %s::uuid",
+            (artifact_id,),
+        ) or []
+        taken = {r["revision_code"] for r in existing}
+        code = requested_code
+        if code in taken:
+            import re as _re2
+            nm = _re2.search(r"(\d+)$", code)
+            n = int(nm.group(1)) + 1 if nm else 2
+            base = code[: nm.start()] if nm else "R"
+            while f"{base}{n}" in taken:
+                n += 1
+            code = f"{base}{n}"
+
+        revision = create_design_revision(artifact_id, {
+            "revision_code":    code,
+            "change_summary":   body.get("change_summary") or "",
+            "source_filename":  body.get("filename") or "",
+            "design_data_json": design_data,
+            "changed_by":       body.get("changed_by") or "design-reviewer",
+        })
+
+        # Run Groq approval-intelligence validation before opening review session
+        run_groq_validation(str(revision["id"]))
+
+        # Auto-create review session so user lands directly in the workspace
+        review = create_review_session_from_design_revision(
+            design_revision_id=str(revision["id"]),
+            created_by="design-reviewer",
+        )
+        session = review["session"]
+        return JSONResponse({
+            "id": revision["id"],
+            "revision_code": revision["revision_code"],
+            "redirect_url": f"/reviews/{session['id']}",
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create variant: {exc}")
+
+
 @app.post("/api/design-artifacts/{artifact_id}/revisions")
 async def create_design_revision_api(artifact_id: str, request: Request):
     """Create a structured design/drawing revision and persist deterministic deltas."""
@@ -2798,6 +2989,37 @@ async def create_review_session_for_design_revision(design_revision_id: str, req
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not create review session: {exc}")
+
+
+@app.get("/api/design-revisions/{design_revision_id}/review-preview")
+async def get_design_revision_review_preview(design_revision_id: str):
+    """
+    Return a structured preview of what the system extracted from this revision
+    and which rules will be applied — shown to the drawing submitter BEFORE the
+    review session is created, so they can verify the extraction is correct.
+    """
+    try:
+        preview = get_review_preview(design_revision_id)
+        return JSONResponse(preview)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not load review preview: {exc}")
+
+
+@app.get("/api/design-revisions/{design_revision_id}/senior-report")
+async def get_senior_reviewer_report(design_revision_id: str):
+    """
+    Generate a senior-engineer-style narrative review report for this revision.
+    Deterministic — uses validation results + approved reference programs.
+    """
+    try:
+        report = generate_senior_reviewer_report(design_revision_id)
+        return JSONResponse(report)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not generate report: {exc}")
 
 
 @app.get("/parts/{part_id}", response_class=HTMLResponse)
@@ -3519,6 +3741,74 @@ async def review_workspace(request: Request, session_id: str):
         "SELECT rule_key, display_name, rule_group, severity, description FROM engineering_review_rules ORDER BY severity, rule_group, display_name"
     )
     review["all_rules"] = all_rules
+
+    # ── Drawing annotation dots — load from drawing_validation_results ──────────
+    # These drive the interactive dot overlay on the drawing image.
+    # Positions come from evidence_json (x_pct / y_pct stored by run_groq_validation).
+    # Fallback map covers findings created before coordinate storage was added.
+    _ANNOT_FALLBACK: dict[str, tuple[float, float]] = {
+        "ENGINE_LOAD_FIT_CLASS":              (28.0, 25.0),
+        "UPPER_HOLE_DIAMETER_PROTECTED":      (24.0, 22.0),
+        "LOWER_HOLE_DIAMETER_PROTECTED":      (24.0, 72.0),
+        "FATIGUE_SPECTRUM_NOTE_REQUIRED":     (80.0, 22.0),
+        "MISSING_REQUIRED_DIMENSION":         (38.0, 50.0),
+        "HOLE_CENTRE_DISTANCE_CONSISTENCY":   (38.0, 45.0),
+        "OVERALL_HEIGHT_PRESENT":             (10.0, 48.0),
+        "GENERAL_TOLERANCE_STANDARD_STATED":  (80.0, 30.0),
+        "SURFACE_FINISH_REQUIRED":            (80.0, 38.0),
+        "NVH_VALIDATION_NOTE_REQUIRED":       (80.0, 27.0),
+        "SECTION_VIEW_THICKNESS_SHOWN":       (60.0, 45.0),
+        "MISSING_THICKNESS_CALLOUT":          (60.0, 42.0),
+        "PROCESS_DEFINED":                    (80.0, 46.0),
+        "MATERIAL_SPECIFIED":                 (80.0, 52.0),
+        "MOUNTING_HOLE_COUNT_REQUIRED":       (28.0, 52.0),
+        "MISSING_HOLE_CALLOUT":               (28.0, 46.0),
+        "CHANGE_SUMMARY_PRESENT":             (80.0, 88.0),
+        "DRAWING_NUMBER_PRESENT":             (80.0, 82.0),
+        "REVISION_CODE_PRESENT":              (80.0, 85.0),
+        "FEATURE_OUTSIDE_REFERENCE_ENVELOPE": (42.0, 35.0),
+    }
+
+    _design_rev_id = (review.get("session") or {}).get("design_revision_id")
+    drawing_annots: list[dict] = []
+    if _design_rev_id:
+        import json as _j
+        _rows = fetch_all(
+            """SELECT rule_key, status, title, what_is_wrong, evidence_json
+               FROM drawing_validation_results
+               WHERE design_revision_id = %s::uuid
+               ORDER BY CASE status WHEN 'BLOCK' THEN 0 WHEN 'WARN' THEN 1 ELSE 2 END,
+                        rule_key""",
+            (str(_design_rev_id),),
+        ) or []
+        # Spread unknown rules evenly across the drawing to avoid stacking
+        _auto_x = 15.0
+        _auto_step = 12.0
+        for _r in _rows:
+            _ev = _r.get("evidence_json") or {}
+            if isinstance(_ev, str):
+                try: _ev = _j.loads(_ev)
+                except Exception: _ev = {}
+            _rk = _r["rule_key"]
+            _x = _ev.get("x_pct")
+            _y = _ev.get("y_pct")
+            if _x is None or _y is None:
+                _fb = _ANNOT_FALLBACK.get(_rk)
+                if _fb:
+                    _x, _y = _fb
+                else:
+                    _x = _auto_x % 85 + 5
+                    _y = 20.0 + (_auto_x // 85) * 25
+                    _auto_x += _auto_step
+            drawing_annots.append({
+                "rule_key":    _rk,
+                "status":      _r["status"],
+                "title":       _r.get("title") or _rk,
+                "description": _r.get("what_is_wrong") or "",
+                "x_pct":       round(float(_x), 1),
+                "y_pct":       round(float(_y), 1),
+            })
+    review["drawing_annots"] = drawing_annots
 
     return templates.TemplateResponse("review_workspace.html", {
         "request": request,
